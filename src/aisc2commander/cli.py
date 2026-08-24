@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 from .app import AppConfig, CommanderApp
@@ -14,7 +15,17 @@ from .smoke import run_smoke_test
 
 
 LOG = logging.getLogger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def application_root() -> Path:
+    """Return the writable install root for source and bundled executions."""
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+PROJECT_ROOT = application_root()
 DEFAULT_MAP = PROJECT_ROOT / "vendor" / "s2client-api" / "maps" / "Ladder" / "(2)Bel'ShirVestigeLE (Void).SC2Map"
 SMOKE_MAP = PROJECT_ROOT / "vendor" / "s2client-api" / "maps" / "Test" / "Empty.SC2Map"
 OPENAI_KEY_FILE = PROJECT_ROOT / "config" / "openai.env"

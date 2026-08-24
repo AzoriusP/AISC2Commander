@@ -576,6 +576,30 @@ class OpenAITranscriber:
         return text
 
 
+def local_whisper_server_command(project_root: Path, model: str) -> list[str]:
+    """Build the resident Whisper command for bundled and source installs."""
+
+    helper = project_root / "AISC2Whisper.exe"
+    if helper.is_file():
+        command = [str(helper)]
+    else:
+        python = project_root / ".voice-venv" / "Scripts" / "python.exe"
+        script = project_root / "scripts" / "transcribe_local.py"
+        if not python.is_file():
+            raise RuntimeError("本地语音环境尚未安装，请运行 scripts\\setup-voice.ps1")
+        if not script.is_file():
+            raise RuntimeError("缺少本地语音转写程序 scripts\\transcribe_local.py")
+        command = [str(python), str(script)]
+    return [
+        *command,
+        "--serve",
+        "--model",
+        model,
+        "--model-dir",
+        str(project_root / "models" / "whisper"),
+    ]
+
+
 class LocalWhisperTranscriber:
     """Keep faster-whisper resident in its isolated environment."""
 
@@ -653,25 +677,12 @@ class LocalWhisperTranscriber:
             return process
         if process is not None:
             self._discard_process()
-        python = self.project_root / ".voice-venv" / "Scripts" / "python.exe"
-        script = self.project_root / "scripts" / "transcribe_local.py"
-        if not python.is_file():
-            raise RuntimeError("本地语音环境尚未安装，请运行 scripts\\setup-voice.ps1")
-        if not script.is_file():
-            raise RuntimeError("缺少本地语音转写程序 scripts\\transcribe_local.py")
+        command = local_whisper_server_command(self.project_root, self.model)
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self._responses = queue.Queue()
         self._stderr.clear()
         process = subprocess.Popen(
-            [
-                str(python),
-                str(script),
-                "--serve",
-                "--model",
-                self.model,
-                "--model-dir",
-                str(self.project_root / "models" / "whisper"),
-            ],
+            command,
             cwd=self.project_root,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
