@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aisc2commander"
+version = "0.1.0"
+description = "StarCraft II AI Commander gameplay-validation prototype using Blizzard's official SC2 API protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "protobuf==3.20.3",
+  "s2clientprotocol==5.0.16.97563.0",
+  "websockets==15.0.1",
+  "openai==3.2.0",
+  "numpy==2.5.2",
+  "sounddevice==0.5.6",
+  "Pillow==12.3.0",
+  "mpyq==0.2.5",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.2"]
+gui = ["pyinstaller==6.21.0"]
+
+[project.scripts]
+sc2-commander = "aisc2commander.cli:main"
+sc2-commander-gui = "aisc2commander.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+  "ignore:.*deprecated create function.*:DeprecationWarning:s2clientprotocol.*",
+  "ignore:datetime.datetime.utcfromtimestamp.*:DeprecationWarning:google.protobuf.*",
+]
