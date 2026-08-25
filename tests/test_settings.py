@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 
-from aisc2commander import cli
 from aisc2commander.settings import (
     load_env_file,
     load_openai_api_key,
@@ -39,8 +38,6 @@ def test_load_env_file_only_accepts_allowlisted_names(tmp_path, monkeypatch) -> 
     )
     loaded = load_env_file(path, {"LLM_PROVIDER", "OLLAMA_MODEL"})
     assert loaded == ("LLM_PROVIDER", "OLLAMA_MODEL")
-    assert os.environ["OLLAMA_MODEL"] == "qwen3.6"
-    assert "UNSAFE_SETTING" not in os.environ
 
 
 def test_save_openai_api_key_replaces_key_and_preserves_other_lines(tmp_path) -> None:
@@ -68,12 +65,5 @@ def test_save_openai_api_key_rejects_empty_or_multiline_values(tmp_path) -> None
             pass
         else:
             raise AssertionError(f"accepted invalid key: {invalid!r}")
-
-
-def test_cli_uses_executable_directory_for_bundled_install(monkeypatch, tmp_path) -> None:
-    executable = tmp_path / "AISC2CommanderBackend.exe"
-    executable.write_bytes(b"test")
-    monkeypatch.setattr(cli.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(cli.sys, "executable", str(executable))
-
-    assert cli.application_root() == tmp_path
+    assert os.environ["OLLAMA_MODEL"] == "qwen3.6"
+    assert "UNSAFE_SETTING" not in os.environ

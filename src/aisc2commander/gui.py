@@ -533,7 +533,7 @@ def find_project_root() -> Path:
     candidates: list[Path] = []
     if getattr(sys, "frozen", False):
         executable_dir = Path(sys.executable).resolve().parent
-        return executable_dir
+        candidates.extend((executable_dir, executable_dir.parent))
     candidates.extend((Path.cwd(), Path(__file__).resolve().parents[2]))
     for candidate in candidates:
         if (candidate / "scripts" / "run.ps1").is_file():
@@ -971,15 +971,7 @@ class CommanderGUI:
             return
         script = self.project_root / "scripts" / "run.ps1"
         python = self.project_root / ".venv" / "Scripts" / "python.exe"
-        backend = self.project_root / "AISC2CommanderBackend.exe"
-        bundled = bool(getattr(sys, "frozen", False))
-        if bundled and not backend.is_file():
-            messagebox.showerror(
-                "无法启动",
-                "缺少 AISC2CommanderBackend.exe，请重新解压完整测试包。",
-            )
-            return
-        if not bundled and not python.is_file():
+        if not python.is_file():
             messagebox.showerror("无法启动", "缺少 .venv，请先运行 scripts\\bootstrap.ps1")
             return
         connection = self._choose_game_connection()
@@ -1014,17 +1006,8 @@ class CommanderGUI:
         else:
             computer_arguments.append("--no-opponent")
         try:
-            common_arguments = [
-                *map_arguments,
-                *connection_arguments,
-                "--race",
-                self.selected_race,
-                *computer_arguments,
-            ]
-            command = (
-                [str(backend), *common_arguments]
-                if bundled
-                else [
+            self.launch_process = subprocess.Popen(
+                [
                     "powershell.exe",
                     "-NoProfile",
                     "-ExecutionPolicy",
@@ -1032,11 +1015,12 @@ class CommanderGUI:
                     "-NoExit",
                     "-File",
                     str(script),
-                    *common_arguments,
-                ]
-            )
-            self.launch_process = subprocess.Popen(
-                command,
+                    *map_arguments,
+                    *connection_arguments,
+                    "--race",
+                    self.selected_race,
+                    *computer_arguments,
+                ],
                 cwd=self.project_root,
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
             )
@@ -1708,10 +1692,7 @@ class CommanderGUI:
             )
             if completed.returncode == 0:
                 killed.append(f"运行终端 PID {launch.pid}（含子进程）")
-        if _terminate_named_process(
-            self.commander_pid,
-            {"python.exe", "pythonw.exe", "AISC2CommanderBackend.exe"},
-        ):
+        if _terminate_named_process(self.commander_pid, {"python.exe", "pythonw.exe"}):
             killed.append(f"Commander PID {self.commander_pid}")
         if _terminate_named_process(self.sc2_pid, {"sc2_x64.exe"}):
             killed.append(f"SC2 PID {self.sc2_pid}")
@@ -2703,14 +2684,10 @@ class CommanderGUI:
             return None
         if self.voice_provider == "local" and not (
             self.project_root / ".voice-venv" / "Scripts" / "python.exe"
-        ).is_file() and not (self.project_root / "AISC2Whisper.exe").is_file():
+        ).is_file():
             messagebox.showwarning(
                 "需要安装本地语音模型",
-                (
-                    f"测试包缺少 AISC2Whisper.exe，请重新解压完整测试包后点击{retry_action}。"
-                    if getattr(sys, "frozen", False)
-                    else f"请先运行 scripts\\setup-voice.ps1，然后重新点击{retry_action}。"
-                ),
+                f"请先运行 scripts\\setup-voice.ps1，然后重新点击{retry_action}。",
             )
             return None
         if self.voice_transcriber is None:

@@ -27,15 +27,6 @@ def test_gui_finds_project_root() -> None:
     assert (find_project_root() / "scripts" / "run.ps1").is_file()
 
 
-def test_gui_uses_executable_directory_for_bundled_install(monkeypatch, tmp_path) -> None:
-    executable = tmp_path / "AISC2CommanderGUI.exe"
-    executable.write_bytes(b"test")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(executable))
-
-    assert find_project_root() == tmp_path
-
-
 def test_game_map_choice_requires_explicit_valid_source(tmp_path) -> None:
     local = tmp_path / "Custom.SC2Map"
     local.write_bytes(b"map")

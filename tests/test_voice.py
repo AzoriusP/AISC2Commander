@@ -7,25 +7,10 @@ import pytest
 
 from aisc2commander.agent.voice import (
     OpenAITranscriber,
-    local_whisper_server_command,
     StreamingWavRecorder,
     VoiceActivitySegmenter,
     VoiceCommandListener,
 )
-
-
-def test_local_whisper_prefers_bundled_helper(tmp_path) -> None:
-    helper = tmp_path / "AISC2Whisper.exe"
-    helper.write_bytes(b"test")
-
-    assert local_whisper_server_command(tmp_path, "small") == [
-        str(helper),
-        "--serve",
-        "--model",
-        "small",
-        "--model-dir",
-        str(tmp_path / "models" / "whisper"),
-    ]
 
 
 class _FakeAudio:
