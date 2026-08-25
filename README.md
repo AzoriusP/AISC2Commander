@@ -1,4 +1,4 @@
-# StarCraft II AI Commander — 第一阶段原型
+# StarCraft II AI Commander
 
 这是一个只使用 Blizzard 官方 StarCraft II API 的 Windows 玩法验证原型。它以 realtime 模式读取 Observation，显示资源、单位、orders、API Action Error、当前选择和官方控制编组。独立 Agent Harness 已覆盖 Terran、Protoss、Zerg 标准 Melee 的移动、攻击、生产/变形、工人建造、科技、编组和官方当前可用能力，并提供带条件、重复、保持、并行、优先级和抢占的持续任务；桌面界面还提供地图点位编辑与本地 Whisper 中文语音转写。
 
