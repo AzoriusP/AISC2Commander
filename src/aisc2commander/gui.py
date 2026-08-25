@@ -54,6 +54,9 @@ CONTROL_URL = "http://127.0.0.1:8765"
 TRANSCRIPTION_MODEL = "gpt-transcribe"
 MAP_CANVAS_PADDING = 42.0
 MAP_COORDINATE_INTERVAL = 50.0
+MAP_ZOOM_MIN = 1.0
+MAP_ZOOM_MAX = 4.0
+MAP_ZOOM_STEP = 0.25
 RACE_OPTIONS = (
     ("人族（Terran）", "terran"),
     ("虫族（Zerg）", "zerg"),
@@ -153,6 +156,61 @@ def _map_viewport(
     left = (width - rendered_width) / 2
     top = (height - rendered_height) / 2
     return left, top, left + rendered_width, top + rendered_height
+
+
+def _zoomed_map_viewport(
+    width: float,
+    height: float,
+    min_x: float,
+    min_y: float,
+    max_x: float,
+    max_y: float,
+    zoom: float,
+    padding: float = MAP_CANVAS_PADDING,
+) -> tuple[float, float, float, float, float, float]:
+    """Return the map viewport and scrollable document size at a fit-relative zoom."""
+
+    base_left, base_top, base_right, base_bottom = _map_viewport(
+        width,
+        height,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+        padding,
+    )
+    safe_zoom = max(MAP_ZOOM_MIN, min(MAP_ZOOM_MAX, float(zoom)))
+    rendered_width = (base_right - base_left) * safe_zoom
+    rendered_height = (base_bottom - base_top) * safe_zoom
+    document_width = max(float(width), rendered_width + 2 * padding)
+    document_height = max(float(height), rendered_height + 2 * padding)
+    left = (document_width - rendered_width) / 2
+    top = (document_height - rendered_height) / 2
+    return (
+        left,
+        top,
+        left + rendered_width,
+        top + rendered_height,
+        document_width,
+        document_height,
+    )
+
+
+def _canvas_to_world(
+    canvas_x: float,
+    canvas_y: float,
+    viewport: tuple[float, float, float, float],
+    world_bounds: tuple[float, float, float, float],
+) -> tuple[float, float] | None:
+    """Convert scrollable canvas coordinates back to SC2 world coordinates."""
+
+    left, top, right, bottom = viewport
+    min_x, min_y, max_x, max_y = world_bounds
+    if not (left <= canvas_x <= right and top <= canvas_y <= bottom):
+        return None
+    x = min_x + (canvas_x - left) / max(right - left, 1.0) * (max_x - min_x)
+    y = min_y + (bottom - canvas_y) / max(bottom - top, 1.0) * (max_y - min_y)
+    return x, y
 
 
 class ResponsiveWindowScaler:
@@ -664,6 +722,11 @@ class CommanderGUI:
         self.about_window: tk.Toplevel | None = None
         self.map_window: tk.Toplevel | None = None
         self.map_canvas: tk.Canvas | None = None
+        self.map_zoom = MAP_ZOOM_MIN
+        self.map_zoom_var: tk.DoubleVar | None = None
+        self.map_zoom_label: tk.StringVar | None = None
+        self.map_viewport_bounds: tuple[float, float, float, float] | None = None
+        self.map_document_size: tuple[float, float] | None = None
         self.map_point_list: tk.Listbox | None = None
         self.map_editor_profile_key = ""
         self.map_editor_display_name = ""
@@ -680,6 +743,8 @@ class CommanderGUI:
         self.map_background_path: Path | None = None
         self.map_background_origin = ""
         self.map_background_label = ""
+        self._map_zoom_after_id: str | None = None
+        self._map_zoom_anchor: tuple[float, float, float, float] | None = None
         self._ui_events: queue.Queue[tuple[object, tuple[object, ...]]] = queue.Queue()
 
         self.status_text = tk.StringVar(value=self._t("status_disconnected"))
@@ -2435,6 +2500,12 @@ class CommanderGUI:
         self.map_preset_var = tk.StringVar(value=active_preset)
         self.map_preset_status = tk.StringVar(value="点位修改会自动保存")
         self.map_preview_status = tk.StringVar(value=self._map_preview_description())
+        self.map_zoom = MAP_ZOOM_MIN
+        self.map_zoom_var = tk.DoubleVar(value=self.map_zoom)
+        self.map_zoom_label = tk.StringVar(value="100%")
+        self.map_viewport_bounds = None
+        self.map_document_size = None
+        self._map_zoom_anchor = None
         self._refresh_map_editor_points()
 
         window = tk.Toplevel(self.root)
@@ -2497,12 +2568,81 @@ class CommanderGUI:
         )
         self._refresh_map_preset_controls()
 
+        zoom_row = ttk.Frame(outer)
+        zoom_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(zoom_row, text="图片缩放：", font=("Microsoft YaHei UI", 10, "bold")).pack(
+            side="left"
+        )
+        ttk.Button(
+            zoom_row,
+            text="−",
+            width=3,
+            command=lambda: self._adjust_map_zoom(-MAP_ZOOM_STEP),
+        ).pack(side="left", padx=(3, 3))
+        ttk.Scale(
+            zoom_row,
+            from_=MAP_ZOOM_MIN,
+            to=MAP_ZOOM_MAX,
+            variable=self.map_zoom_var,
+            command=self._map_zoom_scale_changed,
+            length=220,
+        ).pack(side="left")
+        ttk.Button(
+            zoom_row,
+            text="+",
+            width=3,
+            command=lambda: self._adjust_map_zoom(MAP_ZOOM_STEP),
+        ).pack(side="left", padx=(3, 7))
+        ttk.Label(
+            zoom_row,
+            textvariable=self.map_zoom_label,
+            width=6,
+            anchor="center",
+            font=("Consolas", 10, "bold"),
+        ).pack(side="left")
+        ttk.Button(zoom_row, text="适合窗口", command=self._reset_map_zoom).pack(
+            side="left", padx=(3, 12)
+        )
+        ttk.Label(
+            zoom_row,
+            text="滚轮缩放；滚动条或按住鼠标中键拖动画面",
+            foreground="#59636e",
+        ).pack(side="left")
+
         body = ttk.Frame(outer)
         body.pack(fill="both", expand=True)
-        canvas = tk.Canvas(body, background="#101820", highlightthickness=1, highlightbackground="#52616b")
-        canvas.pack(side="left", fill="both", expand=True)
+        canvas_frame = ttk.Frame(body)
+        canvas_frame.pack(side="left", fill="both", expand=True)
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(
+            canvas_frame,
+            background="#101820",
+            highlightthickness=1,
+            highlightbackground="#52616b",
+        )
+        horizontal_scrollbar = ttk.Scrollbar(
+            canvas_frame,
+            orient="horizontal",
+            command=canvas.xview,
+        )
+        vertical_scrollbar = ttk.Scrollbar(
+            canvas_frame,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        canvas.configure(
+            xscrollcommand=horizontal_scrollbar.set,
+            yscrollcommand=vertical_scrollbar.set,
+        )
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vertical_scrollbar.grid(row=0, column=1, sticky="ns")
+        horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
         canvas.bind("<Button-1>", self._map_canvas_clicked)
-        canvas.bind("<Configure>", lambda _event: self._draw_map_editor())
+        canvas.bind("<Configure>", self._map_canvas_configured)
+        canvas.bind("<MouseWheel>", self._map_canvas_mousewheel)
+        canvas.bind("<ButtonPress-2>", self._map_canvas_pan_start)
+        canvas.bind("<B2-Motion>", self._map_canvas_pan_move)
         self.map_canvas = canvas
 
         sidebar = ttk.Frame(body, width=190, padding=(12, 0, 0, 0))
@@ -2516,6 +2656,17 @@ class CommanderGUI:
         def closed() -> None:
             self.map_window = None
             self.map_canvas = None
+            if self._map_zoom_after_id is not None:
+                try:
+                    window.after_cancel(self._map_zoom_after_id)
+                except tk.TclError:
+                    pass
+            self._map_zoom_after_id = None
+            self._map_zoom_anchor = None
+            self.map_zoom_var = None
+            self.map_zoom_label = None
+            self.map_viewport_bounds = None
+            self.map_document_size = None
             self.map_point_list = None
             self.map_preset_combo = None
             self.map_preset_var = None
@@ -2805,6 +2956,111 @@ class CommanderGUI:
             f"地图“{self.map_editor_display_name}”的点位预设“{preset}”已保存，共 {count} 个点位。",
         )
 
+    def _map_canvas_anchor(self, screen_x: float, screen_y: float) -> tuple[float, float, float, float]:
+        canvas = self.map_canvas
+        viewport = self.map_viewport_bounds
+        if canvas is None or viewport is None:
+            return screen_x, screen_y, 0.5, 0.5
+        left, top, right, bottom = viewport
+        canvas_x = canvas.canvasx(screen_x)
+        canvas_y = canvas.canvasy(screen_y)
+        fraction_x = (canvas_x - left) / max(right - left, 1.0)
+        fraction_y = (canvas_y - top) / max(bottom - top, 1.0)
+        return (
+            screen_x,
+            screen_y,
+            max(0.0, min(1.0, fraction_x)),
+            max(0.0, min(1.0, fraction_y)),
+        )
+
+    def _restore_map_canvas_anchor(self, anchor: tuple[float, float, float, float] | None) -> None:
+        canvas = self.map_canvas
+        viewport = self.map_viewport_bounds
+        document_size = self.map_document_size
+        if canvas is None or viewport is None or document_size is None or anchor is None:
+            return
+        screen_x, screen_y, fraction_x, fraction_y = anchor
+        left, top, right, bottom = viewport
+        document_width, document_height = document_size
+        target_x = left + fraction_x * (right - left) - screen_x
+        target_y = top + fraction_y * (bottom - top) - screen_y
+        max_offset_x = max(document_width - canvas.winfo_width(), 0.0)
+        max_offset_y = max(document_height - canvas.winfo_height(), 0.0)
+        target_x = max(0.0, min(max_offset_x, target_x))
+        target_y = max(0.0, min(max_offset_y, target_y))
+        canvas.xview_moveto(target_x / document_width if document_width > 0 else 0.0)
+        canvas.yview_moveto(target_y / document_height if document_height > 0 else 0.0)
+
+    def _map_zoom_scale_changed(self, value: str) -> None:
+        try:
+            zoom = float(value)
+        except (TypeError, ValueError):
+            return
+        self._schedule_map_zoom(zoom)
+
+    def _schedule_map_zoom(
+        self,
+        zoom: float,
+        *,
+        screen_x: float | None = None,
+        screen_y: float | None = None,
+    ) -> None:
+        canvas = self.map_canvas
+        if canvas is None:
+            return
+        if self._map_zoom_anchor is None:
+            self._map_zoom_anchor = self._map_canvas_anchor(
+                canvas.winfo_width() / 2 if screen_x is None else screen_x,
+                canvas.winfo_height() / 2 if screen_y is None else screen_y,
+            )
+        self.map_zoom = max(MAP_ZOOM_MIN, min(MAP_ZOOM_MAX, float(zoom)))
+        if self.map_zoom_var is not None:
+            self.map_zoom_var.set(self.map_zoom)
+        if self.map_zoom_label is not None:
+            self.map_zoom_label.set(f"{round(self.map_zoom * 100):d}%")
+        if self._map_zoom_after_id is not None:
+            try:
+                canvas.after_cancel(self._map_zoom_after_id)
+            except tk.TclError:
+                pass
+        self._map_zoom_after_id = canvas.after(35, self._commit_map_zoom)
+
+    def _commit_map_zoom(self) -> None:
+        self._map_zoom_after_id = None
+        anchor = self._map_zoom_anchor
+        self._map_zoom_anchor = None
+        self._draw_map_editor()
+        self._restore_map_canvas_anchor(anchor)
+
+    def _adjust_map_zoom(self, delta: float) -> None:
+        target = round((self.map_zoom + delta) / MAP_ZOOM_STEP) * MAP_ZOOM_STEP
+        self._schedule_map_zoom(target)
+
+    def _reset_map_zoom(self) -> None:
+        self._schedule_map_zoom(MAP_ZOOM_MIN)
+
+    def _map_canvas_mousewheel(self, event: tk.Event[tk.Canvas]) -> str:
+        direction = 1 if event.delta > 0 else -1
+        self._schedule_map_zoom(
+            self.map_zoom + direction * MAP_ZOOM_STEP,
+            screen_x=float(event.x),
+            screen_y=float(event.y),
+        )
+        return "break"
+
+    def _map_canvas_pan_start(self, event: tk.Event[tk.Canvas]) -> None:
+        if self.map_canvas is not None:
+            self.map_canvas.scan_mark(event.x, event.y)
+
+    def _map_canvas_pan_move(self, event: tk.Event[tk.Canvas]) -> None:
+        if self.map_canvas is not None:
+            self.map_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _map_canvas_configured(self, event: tk.Event[tk.Canvas]) -> None:
+        anchor = self._map_canvas_anchor(event.width / 2, event.height / 2)
+        self._draw_map_editor()
+        self._restore_map_canvas_anchor(anchor)
+
     def _draw_map_editor(self) -> None:
         canvas = self.map_canvas
         point_list = self.map_point_list
@@ -2822,14 +3078,18 @@ class CommanderGUI:
             return
         width = max(canvas.winfo_width(), 100)
         height = max(canvas.winfo_height(), 100)
-        left, top, right, bottom = _map_viewport(
+        left, top, right, bottom, document_width, document_height = _zoomed_map_viewport(
             width,
             height,
             min_x,
             min_y,
             max_x,
             max_y,
+            self.map_zoom,
         )
+        self.map_viewport_bounds = (left, top, right, bottom)
+        self.map_document_size = (document_width, document_height)
+        canvas.configure(scrollregion=(0, 0, document_width, document_height))
 
         def screen(x: float, y: float) -> tuple[float, float]:
             sx = left + (x - min_x) / max(max_x - min_x, 1.0) * (right - left)
@@ -3001,18 +3261,18 @@ class CommanderGUI:
             return
         min_x, min_y = float(bounds["min_x"]), float(bounds["min_y"])
         max_x, max_y = float(bounds["max_x"]), float(bounds["max_y"])
-        left, top, right, bottom = _map_viewport(
-            canvas.winfo_width(),
-            canvas.winfo_height(),
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        )
-        if not (left <= event.x <= right and top <= event.y <= bottom):
+        viewport = self.map_viewport_bounds
+        if viewport is None:
             return
-        x = min_x + (event.x - left) / max(right - left, 1.0) * (max_x - min_x)
-        y = min_y + (bottom - event.y) / max(bottom - top, 1.0) * (max_y - min_y)
+        world = _canvas_to_world(
+            canvas.canvasx(event.x),
+            canvas.canvasy(event.y),
+            viewport,
+            (min_x, min_y, max_x, max_y),
+        )
+        if world is None:
+            return
+        x, y = world
         label = simpledialog.askstring(
             "设置地图点位",
             f"世界坐标 ({x:.1f}, {y:.1f})\n请输入点位名称（例如 A1）：",

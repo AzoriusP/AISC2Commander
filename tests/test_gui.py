@@ -16,9 +16,11 @@ from aisc2commander.gui import (
     ComputerPlayerChoice,
     GameConnectionChoice,
     GameMapChoice,
+    _canvas_to_world,
     _coordinate_ticks,
     _map_viewport,
     _responsive_scale,
+    _zoomed_map_viewport,
     _terminate_named_process,
     find_project_root,
 )
@@ -222,6 +224,33 @@ def test_map_viewport_preserves_world_coordinate_aspect_ratio() -> None:
     assert (right - left) / (bottom - top) == pytest.approx(128 / 144)
     assert 0 <= left < right <= 800
     assert 0 <= top < bottom <= 600
+
+
+def test_zoomed_map_viewport_grows_scrollable_map_without_distorting_coordinates() -> None:
+    left, top, right, bottom, document_width, document_height = _zoomed_map_viewport(
+        800,
+        600,
+        8,
+        8,
+        136,
+        152,
+        3.0,
+    )
+    assert (right - left) / (bottom - top) == pytest.approx(128 / 144)
+    assert document_width > 800
+    assert document_height > 600
+    assert _canvas_to_world(
+        (left + right) / 2,
+        (top + bottom) / 2,
+        (left, top, right, bottom),
+        (8, 8, 136, 152),
+    ) == pytest.approx((72, 80))
+    assert _canvas_to_world(
+        right + 1,
+        bottom + 1,
+        (left, top, right, bottom),
+        (8, 8, 136, 152),
+    ) is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Tk window layout validation")
