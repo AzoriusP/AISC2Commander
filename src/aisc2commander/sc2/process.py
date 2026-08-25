@@ -76,7 +76,6 @@ def discover_sc2_executable(explicit: str | Path | None = None) -> Path:
     install_roots = [
         Path(r"C:\Program Files (x86)\StarCraft II"),
         Path(r"C:\Program Files\StarCraft II"),
-        Path(r"G:\StarCraft II"),
     ]
     for root in install_roots:
         versions = root / "Versions"

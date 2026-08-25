@@ -2,6 +2,8 @@
 
 这是一个只使用 Blizzard 官方 StarCraft II API 的 Windows 玩法验证原型。它以 realtime 模式读取 Observation，显示资源、单位、orders、API Action Error、当前选择和官方控制编组。独立 Agent Harness 已覆盖 Terran、Protoss、Zerg 标准 Melee 的移动、攻击、生产/变形、工人建造、科技、编组和官方当前可用能力，并提供带条件、重复、保持、并行、优先级和抢占的持续任务；桌面界面还提供地图点位编辑与本地 Whisper 中英文语音转写。
 
+> **许可说明：** 本仓库源码公开可见，但不是开源软件。仅允许非商业下载、构建、测试和本地使用；禁止商业使用、修改授权和再发布。欢迎通过 GitHub Issues 提交错误报告与建议。完整条款见 [LICENSE](LICENSE)，构建和测试步骤见 [TESTING.md](TESTING.md)。
+
 ## 合规与架构
 
 - 通信协议是 Blizzard 官方 [`s2client-proto`](https://github.com/Blizzard/s2client-proto) 的 protobuf，通过官方 `/sc2api` WebSocket 端点发送。
@@ -110,12 +112,12 @@ Ollama 本地 endpoint 不验证 `OLLAMA_API_KEY`，但 OpenAI Python 客户端�
 启动前检查：
 
 ```powershell
-setx OLLAMA_MODELS "G:\OllamaModels"
+setx OLLAMA_MODELS "D:\OllamaModels"
 ollama serve
 ollama list
 ```
 
-执行 `setx` 后需要重启旧的 Ollama 服务；本机已经完成该设置和重启。当前服务从 `G:\OllamaModels` 读取模型，而不是默认的 `%USERPROFILE%\.ollama\models`。
+执行 `setx` 后需要重启旧的 Ollama 服务。示例将模型目录改为 `D:\OllamaModels`；请按自己的磁盘位置调整。
 
 `OLLAMA_MODEL` 必须与 `ollama list` 显示的完整 tag 一致。当前项目配置使用 `qwen3.5:9b`；如果本机修改了模型 tag，需要同步修改 `config/llm.env`。确认后直接运行：
 
@@ -129,23 +131,34 @@ ollama list
 
 ## 安装与运行
 
-PowerShell：
+仓库不提交预构建 EXE。测试者需要使用 Windows、Git 和 64 位 Python 3.11 或更高版本，在完整项目目录中运行以下 PowerShell 命令：
 
 ```powershell
+git clone https://github.com/AzoriusP/AISC2Commander.git
+cd AISC2Commander
 .\scripts\bootstrap.ps1
 .\scripts\setup-voice.ps1
+.\scripts\build-gui.ps1
+.\AISC2CommanderGUI.exe
+```
+
+`setup-voice.ps1` 只在需要本地 Whisper 语音转写时执行。命令行方式仍可直接运行：
+
+```powershell
 .\scripts\run.ps1 --map 'D:\Maps\MyCustom.SC2Map'
 ```
 
+完整的环境要求、分级测试和 Issue 提交格式见 [TESTING.md](TESTING.md)。
+
 ### Windows 桌面界面
 
-项目根目录已经生成单文件窗口程序：
+执行 `build-gui.ps1` 后会在当前本地仓库根目录生成：
 
 ```text
 AISC2CommanderGUI.exe
 ```
 
-双击后可以：
+这个 EXE 不会提交到 GitHub，也不是完全独立的绿色发行包；运行时仍需保留完整项目目录、`.venv`、脚本和配置。双击后可以：
 
 - 点击“开启对局”：先选择单机、创建联机对局或加入联机对局。单机与联机主机继续选择本地 `.SC2Map` 或已发布/缓存的 Battle.net 地图，并选择种族；加入方只填写主机 IPv4、联机起始端口和自己的种族，地图由主机的官方 `RequestCreateGame` 决定。
 - 选择地图后，界面会通过官方 `RequestCreateGame` 容量校验动态生成电脑槽位；首次读取会临时启动并关闭一个 SC2 API 进程，结果按地图文件签名缓存在 `config/map_capacity.json`。每个有效电脑槽位可选择种族、官方难度和官方 AI Build（Random/Rush/Timing/Power/Macro/Air）；种族选择“无”时不创建该电脑。
@@ -194,10 +207,10 @@ OPENAI_API_KEY=sk-你的API-Key
 .\scripts\run.ps1 --map 'D:\Maps\MyCustom.SC2Map' --agent-provider rules
 ```
 
-程序已经能从 `%USERPROFILE%\Documents\StarCraft II\ExecuteInfo.txt` 自动寻找 SC2。本机检测到的安装是 `G:\StarCraft II\Versions\Base97579\SC2_x64.exe`；也可显式指定：
+程序会优先从 `%USERPROFILE%\Documents\StarCraft II\ExecuteInfo.txt` 和 Windows 常用安装目录寻找 SC2。自定义安装位置也可显式指定：
 
 ```powershell
-.\scripts\run.ps1 --map 'D:\Maps\MyCustom.SC2Map' --sc2 'G:\StarCraft II\Versions\Base97579\SC2_x64.exe'
+.\scripts\run.ps1 --map 'D:\Maps\MyCustom.SC2Map' --sc2 'D:\Games\StarCraft II\Versions\Base97579\SC2_x64.exe'
 ```
 
 SC2 窗口出现后，不需要点“加入”或“开始”：API 会使用所选自定义地图创建 realtime 游戏并以界面选择的种族作为 participant 加入。直接在游戏窗口中正常使用鼠标：
@@ -458,6 +471,8 @@ Blizzard 官方 `ResponseGameInfo.start_raw` 只公开 map size、playable area�
 
 ## 测试
 
+完整的首次安装、GUI 人工检查、Issue 信息要求和敏感信息注意事项见 [TESTING.md](TESTING.md)。下面是已有自动测试的快捷命令。
+
 不启动游戏的测试：
 
 ```powershell
@@ -485,6 +500,14 @@ smoke test 在 `finally` 中发送官方 quit 并回收自己启动的进程。
 WebSocket 客户端的协议层 keepalive 已禁用：SC2 官方端点会在收到该库默认的
 20 秒 `PING` frame 时直接关闭连接；持续的 protobuf Observation 请求本身已提供
 连接活性检测。
+
+## 反馈与许可
+
+- 欢迎使用 GitHub Issues 提交可复现的错误报告、功能建议和文档问题。
+- 不接受未经邀请的代码补丁、Pull Request、修改版或重新打包的 EXE。
+- 提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，并删除日志中的 API Key、令牌、用户名、IP 和个人路径。
+- 项目采用 [AISC2Commander Source-Available Testing License 1.0](LICENSE)：仅允许非商业下载、构建、测试和本地使用，禁止商业使用及再发布。
+- 许可只覆盖项目作者拥有版权的内容，不授予 StarCraft II、Blizzard Entertainment、地图、模型或第三方依赖的任何额外权利。
 
 ## 连接已手动启动的 API 客户端
 

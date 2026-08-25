@@ -1,0 +1,89 @@
+AISC2Commander Source-Available Testing License 1.0
+
+Copyright (c) 2026 AzoriusP. All rights reserved.
+
+1. Definitions
+
+"Project" means the original AISC2Commander source code, documentation, images,
+and compiled forms made available by the copyright holder, excluding third-party
+materials identified below.
+
+"Non-Commercial Use" means personal, educational, academic, testing, or
+employment-evaluation use that does not generate revenue, support a paid product
+or service, operate a business, or provide a commercial advantage.
+
+2. Limited permission
+
+Subject to this license, you may:
+
+a. view the Project in its official public GitHub repository;
+b. download one or more copies for your own Non-Commercial Use;
+c. build and run unmodified copies locally for Non-Commercial Use;
+d. change local configuration values solely as required to run or test the
+   Project; and
+e. submit bug reports, feature requests, and other non-code feedback through the
+   Issues section of the official GitHub repository.
+
+GitHub may also allow you to create a fork through its standard functionality.
+Such a fork does not grant any rights beyond those required by GitHub's Terms of
+Service and this license.
+
+3. Restrictions
+
+Unless you first obtain separate written permission from the copyright holder,
+you may not:
+
+a. use the Project, in whole or in part, for any commercial purpose;
+b. sell, rent, license, sublicense, monetize, or offer the Project as part of a
+   product, service, subscription, consulting engagement, or paid activity;
+c. redistribute, publish, mirror, re-host, transmit, or otherwise provide copies
+   of the Project or its compiled forms to any third party, except for an
+   unmodified fork created solely through GitHub's standard fork functionality;
+d. modify, adapt, translate, or create derivative works from the Project, other
+   than local configuration changes expressly allowed in Section 2;
+e. publish or distribute modified builds, patches, or derivative works; or
+f. remove or alter copyright, license, attribution, or legal notices.
+
+4. Issues and code contributions
+
+Permission to open an Issue does not include permission to redistribute or
+publish Project source code. Do not submit source-code patches or pull requests
+unless the copyright holder requests them in writing. Issue content remains
+subject to GitHub's Terms of Service.
+
+5. Third-party materials
+
+This license applies only to material for which AzoriusP owns the copyright. It
+does not grant rights to StarCraft, StarCraft II, Blizzard Entertainment assets,
+maps, protocols, trademarks, third-party libraries, models, or other third-party
+materials. Those materials remain subject to their respective owners' terms and
+licenses.
+
+6. No trademark license
+
+No permission is granted to use the names, logos, or trademarks of AzoriusP,
+AISC2Commander, Blizzard Entertainment, or any other party except as necessary
+to accurately identify the Project.
+
+7. Termination
+
+Your rights under this license terminate automatically if you breach any term.
+After termination, you must stop using the Project and delete copies under your
+control, except copies GitHub retains as required by its service operation or
+Terms of Service.
+
+8. Disclaimer of warranty and limitation of liability
+
+THE PROJECT IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE
+COPYRIGHT HOLDER WILL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY
+ARISING FROM OR RELATED TO THE PROJECT OR ITS USE.
+
+9. Other permissions
+
+For commercial use, redistribution, modification, or any permission not granted
+above, obtain separate written authorization from the copyright holder.
+
+This is a source-available license, not an open-source license approved by the
+Open Source Initiative.

@@ -1,0 +1,80 @@
+name: Bug report
+description: 报告可以稳定复现的问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢参与测试。请勿提交 API Key、令牌、账号信息、未脱敏日志或第三方受版权保护资源。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 请简要说明发生了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请提供最小、稳定的复现步骤。
+      placeholder: |
+        1. 启动……
+        2. 点击……
+        3. 输入……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      placeholder: Python 3.11.x
+  - type: input
+    id: sc2
+    attributes:
+      label: StarCraft II 版本
+  - type: dropdown
+    id: provider
+    attributes:
+      label: 指令模式
+      options:
+        - 本地规则
+        - Ollama
+        - OpenAI
+        - 未使用/不确定
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志
+      description: 可选。粘贴前请删除 Key、令牌、用户名、IP 和个人路径。
+      render: text
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已经搜索过现有 Issues，且没有提交任何敏感信息。
+          required: true
