@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 from types import SimpleNamespace
 
 from s2clientprotocol import raw_pb2
@@ -17,7 +18,7 @@ from aisc2commander.agent.harness import (
 from aisc2commander.agent.models import AgentGameState, AgentToolCall, PlayableBounds
 from aisc2commander.agent.rules import RulePlanner
 from aisc2commander.app import _snapshot_with_captured_selection
-from aisc2commander.catalog import GameCatalog, UnitTypeInfo, UpgradeInfo
+from aisc2commander.catalog import AbilityInfo, GameCatalog, UnitTypeInfo, UpgradeInfo
 from aisc2commander.models import (
     ObservationSnapshot,
     Point2,
@@ -120,6 +121,53 @@ def test_rules_parse_fuzzy_chinese_move_train_and_attack() -> None:
             "point_name": None,
             "queue": False,
     }
+
+
+def test_rules_parse_worker_mineral_and_vespene_gathering_without_llm() -> None:
+    planner = RulePlanner()
+
+    minerals = planner.plan("让这个农民采集矿脉", _state()).tool_calls[0]
+    assert minerals.name == "gather_resources"
+    assert minerals.arguments == {
+        "selector": "selected",
+        "control_group": None,
+        "worker_type": "SCV",
+        "resource": "minerals",
+        "count": None,
+        "queue": False,
+    }
+
+    protoss = replace(_state(), player_race="protoss")
+    gas = planner.plan("所有探机采集瓦斯", protoss).tool_calls[0]
+    assert gas.name == "gather_resources"
+    assert gas.arguments["selector"] == "all"
+    assert gas.arguments["worker_type"] == "Probe"
+    assert gas.arguments["resource"] == "vespene"
+    assert gas.arguments["count"] is None
+
+    ambiguous = planner.plan("让这些农民采集", _state())
+    assert ambiguous.tool_calls == ()
+    assert "矿物还是瓦斯" in ambiguous.reply
+
+
+def test_rules_prioritize_building_gas_structure_and_preserve_worker_count() -> None:
+    planner = RulePlanner()
+
+    build = planner.plan("选中的农民去建一个采气场", _state()).tool_calls[0]
+    assert build.name == "build_structure"
+    assert build.arguments["structure_type"] == "Refinery"
+    assert build.arguments["builder_selector"] == "selected"
+    assert build.arguments["placement_mode"] == "nearest_geyser"
+
+    misheard_build = planner.plan("选一个农民去旁边建京恋场", _state()).tool_calls[0]
+    assert misheard_build.name == "build_structure"
+    assert misheard_build.arguments["structure_type"] == "Refinery"
+    assert misheard_build.arguments["placement_mode"] == "nearby"
+
+    gather = planner.plan("选两个农民去采气", _state()).tool_calls[0]
+    assert gather.name == "gather_resources"
+    assert gather.arguments["selector"] == "all"
+    assert gather.arguments["count"] == 2
 
 
 def test_rules_parse_common_english_commands_without_calling_an_llm() -> None:
@@ -361,8 +409,10 @@ class _FakeSession:
                 999: "Stimpack",
                 3673: "Rally Units",
                 558: "Raise Supply Depot",
+                3666: "Harvest Gather",
             }
         )
+        self.catalog.ability_details[3666] = AbilityInfo(3666, "Harvest Gather")
         self.catalog.upgrades[5] = UpgradeInfo(
             5,
             "TerranBuildingArmor",
@@ -603,6 +653,87 @@ def test_executor_builds_near_selected_worker_on_nearest_visible_geyser() -> Non
     assert result.details["worker_tag"] == 4
     assert result.details["target_unit_tag"] == 80
     assert session.calls[-1] == ("build", 20, 4, (12, 9), 80, False)
+
+
+def test_executor_assigns_workers_to_real_mineral_fields_and_friendly_gas_buildings() -> None:
+    session = _FakeSession()
+    session.available_by_tag[4] = {3666}
+    executor = AgentActionExecutor(session, BOUNDS)
+    selected = _snapshot_with_captured_selection(_snapshot(), (4,))
+    geyser = _unit(80, "VespeneGeyser", 8.5, 8, alliance=raw_pb2.Neutral)
+    mineral = _unit(81, "MineralField750", 12, 8, alliance=raw_pb2.Neutral)
+    mineral_snapshot = replace(selected, neutral_units=(geyser, mineral))
+    mineral_call = AgentToolCall(
+        "gather_resources",
+        {
+            "selector": "selected",
+            "control_group": None,
+            "worker_type": "SCV",
+            "resource": "minerals",
+            "count": None,
+            "queue": False,
+        },
+    )
+
+    result = executor.execute(mineral_call, mineral_snapshot)
+
+    assert result.success
+    assert result.details["assignments"] == {4: 81}
+    assert session.calls[-1] == (
+        "unit_command",
+        3666,
+        (4,),
+        None,
+        81,
+        False,
+        "action.gather.minerals",
+    )
+
+    refinery = _unit(82, "Refinery", 15, 8, structure=True)
+    gas_snapshot = replace(
+        selected,
+        own_units=selected.own_units + (refinery,),
+        neutral_units=(geyser, mineral),
+    )
+    gas_call = replace(mineral_call, arguments={**mineral_call.arguments, "resource": "vespene"})
+
+    result = executor.execute(gas_call, gas_snapshot)
+
+    assert result.success
+    assert result.details["assignments"] == {4: 82}
+    assert session.calls[-1][4] == 82
+    assert session.calls[-1][6] == "action.gather.vespene"
+
+
+def test_executor_limits_gathering_to_exact_requested_worker_count() -> None:
+    session = _FakeSession()
+    session.available_by_tag.update({4: {3666}, 5: {3666}, 6: {3666}})
+    executor = AgentActionExecutor(session, BOUNDS)
+    base = _snapshot()
+    refinery = _unit(82, "Refinery", 15, 8, structure=True)
+    workers = (
+        base.own_units
+        + (_unit(5, "SCV", 9, 8), _unit(6, "SCV", 30, 30), refinery)
+    )
+    snapshot = replace(base, own_units=workers)
+    call = AgentToolCall(
+        "gather_resources",
+        {
+            "selector": "all",
+            "control_group": None,
+            "worker_type": "SCV",
+            "resource": "vespene",
+            "count": 2,
+            "queue": False,
+        },
+    )
+
+    result = executor.execute(call, snapshot)
+
+    assert result.success
+    assert result.details["requested_count"] == 2
+    assert result.details["worker_tags"] == [4, 5]
+    assert set(session.calls[-1][2]) == {4, 5}
 
 
 def test_executor_nearby_normal_build_searches_official_placements() -> None:

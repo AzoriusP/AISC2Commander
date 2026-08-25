@@ -218,7 +218,7 @@ GAS_STRUCTURE_TYPES = frozenset({"refinery", "assimilator", "extractor"})
 # other standard-melee ability, so this table is an ergonomic layer rather than
 # a finite ability whitelist.
 ABILITY_NAME_ALIASES: dict[str, tuple[str, ...]] = {
-    "采集": ("gather", "harvestgather"),
+    "采集": ("harvestgather", "gather", "smart"),
     "返回资源": ("returncargo",),
     "修理": ("repair",),
     "装载": ("load",),
@@ -419,6 +419,8 @@ class AgentActionExecutor:
                 return self._research(call.arguments, snapshot)
             if call.name == "operate_building":
                 return self._operate_building(call.arguments, snapshot)
+            if call.name == "gather_resources":
+                return self._gather_resources(call.arguments, snapshot)
             if call.name == "use_ability":
                 return self._use_ability(call.arguments, snapshot)
             if call.name == "toggle_autocast":
@@ -599,6 +601,184 @@ class AgentActionExecutor:
                 "x": x,
                 "y": y,
             },
+        )
+
+    def _gather_resources(
+        self,
+        arguments: dict[str, Any],
+        snapshot: ObservationSnapshot,
+    ) -> ToolExecutionResult:
+        selector = _required_string(arguments, "selector")
+        worker_type = _canonical_unit_name(_required_string(arguments, "worker_type"))
+        if worker_type.casefold() not in WORKER_TYPES:
+            raise CommandError("worker_type 必须是 SCV、Probe 或 Drone")
+        resource = _required_string(arguments, "resource")
+        if resource not in {"minerals", "vespene"}:
+            raise CommandError("resource 必须是 minerals 或 vespene")
+        queue = arguments.get("queue")
+        if not isinstance(queue, bool):
+            raise CommandError("queue must be a boolean")
+        requested_count = arguments.get("count")
+        if requested_count is not None and (
+            isinstance(requested_count, bool)
+            or not isinstance(requested_count, int)
+            or not 1 <= requested_count <= 200
+        ):
+            raise CommandError("count 必须为空或 1 到 200 的整数")
+
+        tags = self._resolve_unit_tags(
+            snapshot,
+            selector,
+            worker_type,
+            arguments.get("control_group"),
+        )
+        workers = _units_by_tags(snapshot.own_units, tags)
+        if resource == "minerals":
+            targets = tuple(
+                unit
+                for unit in snapshot.neutral_units
+                if "mineralfield" in _normalized_name(unit.type_name)
+            )
+        else:
+            targets = tuple(
+                unit
+                for unit in snapshot.own_units
+                if unit.is_structure
+                and unit.build_progress >= 0.999
+                and any(
+                    name in _normalized_name(unit.type_name)
+                    for name in GAS_STRUCTURE_TYPES
+                )
+            )
+        if not targets:
+            target_name = "可见的中立矿脉" if resource == "minerals" else "已完成的我方气矿建筑"
+            raise CommandError(f"当前 Observation 中没有{target_name}")
+
+        if requested_count is not None:
+            if len(workers) < requested_count:
+                raise CommandError(
+                    f"只找到 {len(workers)} 个匹配农民，无法选择要求的 {requested_count} 个"
+                )
+            workers = tuple(
+                sorted(
+                    workers,
+                    key=lambda worker: (
+                        any("build" in _normalized_name(order.ability_name) for order in worker.orders),
+                        min(
+                            math.hypot(
+                                target.position.x - worker.position.x,
+                                target.position.y - worker.position.y,
+                            )
+                            for target in targets
+                        ),
+                        worker.tag,
+                    ),
+                )[:requested_count]
+            )
+            tags = tuple(worker.tag for worker in workers)
+
+        available = self.session.available_abilities(tags, ignore_resource_requirements=False)
+        patterns = ABILITY_NAME_ALIASES["采集"]
+        abilities: dict[int, int] = {}
+        for worker in workers:
+            ability_id = next(
+                (
+                    match
+                    for pattern in patterns
+                    if (
+                        match := self.session.catalog.match_ability(
+                            available.get(worker.tag, set()),
+                            pattern,
+                        )
+                    )
+                    is not None
+                ),
+                None,
+            )
+            if ability_id is not None:
+                abilities[worker.tag] = ability_id
+        if not abilities:
+            raise CommandError("所选农民当前没有 Blizzard 报告的可用采集能力")
+        if requested_count is not None and len(abilities) < requested_count:
+            raise CommandError(
+                f"要求选择 {requested_count} 个农民，但当前只有 {len(abilities)} 个具备采集能力"
+            )
+
+        target_tags = {target.tag for target in targets}
+        loads: dict[int, int] = {
+            target.tag: (
+                max(0, target.assigned_harvesters)
+                if resource == "vespene"
+                else 0
+            )
+            for target in targets
+        }
+        if resource == "minerals":
+            for unit in snapshot.own_units:
+                for order in unit.orders[:1]:
+                    if order.target_unit_tag in target_tags:
+                        loads[int(order.target_unit_tag)] += 1
+        # Workers being reassigned will leave their current resource target, so
+        # remove them from the observed load before distributing this command.
+        for worker in workers:
+            for order in worker.orders[:1]:
+                if order.target_unit_tag in target_tags:
+                    current_tag = int(order.target_unit_tag)
+                    loads[current_tag] = max(0, loads[current_tag] - 1)
+
+        commands: dict[tuple[int, int], list[int]] = {}
+        assignments: dict[int, int] = {}
+        for worker in workers:
+            ability_id = abilities.get(worker.tag)
+            if ability_id is None:
+                continue
+            target = min(
+                targets,
+                key=lambda candidate: (
+                    loads[candidate.tag]
+                    >= (
+                        max(1, candidate.ideal_harvesters or 3)
+                        if resource == "vespene"
+                        else 2
+                    ),
+                    math.hypot(
+                        candidate.position.x - worker.position.x,
+                        candidate.position.y - worker.position.y,
+                    ),
+                    loads[candidate.tag],
+                    candidate.tag,
+                ),
+            )
+            loads[target.tag] += 1
+            assignments[worker.tag] = target.tag
+            commands.setdefault((ability_id, target.tag), []).append(worker.tag)
+
+        errors: list[str] = []
+        for (ability_id, target_tag), worker_tags in commands.items():
+            errors.extend(
+                self.session.unit_command(
+                    ability_id,
+                    tuple(worker_tags),
+                    target_unit_tag=target_tag,
+                    queue=queue,
+                    operation=f"action.gather.{resource}",
+                )
+            )
+        details = {
+            "resource": resource,
+            "requested_count": requested_count,
+            "worker_tags": sorted(assignments),
+            "assignments": assignments,
+            "unavailable_worker_tags": sorted(set(tags) - set(assignments)),
+        }
+        if errors:
+            return ToolExecutionResult("gather_resources", False, "; ".join(errors), details)
+        resource_name = "矿物" if resource == "minerals" else "瓦斯"
+        return ToolExecutionResult(
+            "gather_resources",
+            True,
+            f"已让 {len(assignments)} 个农民采集{resource_name}",
+            details,
         )
 
     def _use_ability(

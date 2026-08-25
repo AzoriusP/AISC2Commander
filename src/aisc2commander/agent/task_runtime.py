@@ -521,6 +521,8 @@ def derive_tool_conflict_key(name: str, arguments: dict[str, object]) -> str:
         return f"building:{_normalized(str(arguments.get('structure_type') or '*'))}"
     if name == "research_upgrade":
         return f"research:{_normalized(str(arguments.get('upgrade') or '*'))}"
+    if name == "gather_resources":
+        return f"economy:{_normalized(str(arguments.get('resource') or '*'))}"
     if name == "manage_control_group":
         return f"control-group:{arguments.get('number', '*')}"
     selector = str(

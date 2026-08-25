@@ -265,6 +265,35 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "gather_resources",
+        "description": (
+            "Assign SCV, Probe, or Drone workers to gather minerals or vespene using "
+            "their normal Blizzard-reported harvest ability. Mineral targets are visible "
+            "neutral mineral fields; vespene targets are completed friendly Refinery, "
+            "Assimilator, or Extractor structures."
+        ),
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "enum": ["selected", "all", "random", "control_group"],
+                },
+                "control_group": {"type": ["integer", "null"], "minimum": 1, "maximum": 10},
+                "worker_type": {"type": "string", "enum": ["SCV", "Probe", "Drone"]},
+                "resource": {"type": "string", "enum": ["minerals", "vespene"]},
+                "count": {"type": ["integer", "null"], "minimum": 1, "maximum": 200},
+                "queue": {"type": "boolean"},
+            },
+            "required": [
+                "selector", "control_group", "worker_type", "resource", "count", "queue",
+            ],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "use_ability",
         "description": (
             "Use any normal standard-melee ability that Blizzard reports as currently "

@@ -31,7 +31,7 @@ AgentActionExecutor（最新 Observation 再校验）
 SC2Session（官方 protobuf / WebSocket）
 ```
 
-目前有 12 个白名单工具：`move_units`、`attack_units`、`use_unit_ability`、`use_ability`、`toggle_autocast`、`train_units`、`build_structure`、`research_upgrade`、`operate_building`、`manage_control_group`、`schedule_task`、`control_tasks`。模型不能执行代码、不能直接发送 protobuf、不能提供数字 ability id，也不能调用 `DebugCreateUnit`。执行器还会：
+目前有 13 个白名单工具：`move_units`、`attack_units`、`use_unit_ability`、`gather_resources`、`use_ability`、`toggle_autocast`、`train_units`、`build_structure`、`research_upgrade`、`operate_building`、`manage_control_group`、`schedule_task`、`control_tasks`。模型不能执行代码、不能直接发送 protobuf、不能提供数字 ability id，也不能调用 `DebugCreateUnit`。执行器还会：
 
 - `selected` 在玩家提交指令的瞬间绑定完整 unit tags；模型处理期间即使玩家改选其他单位，执行仍使用这些固定 tags，并从动作执行瞬间的最新 Observation 读取它们的位置、生命、orders 与可用能力。已经死亡、变为敌方或不再存在的 tag 会被明确拒绝。
 - `random` 从最新 Observation 中匹配玩家点名的单位类型，并用官方 `QueryAvailableAbilities` 排除当前不能移动的候选后只绑定一个 tag；这是动作主体解析，不会改变玩家在 SC2 画面中的鼠标选择。
@@ -93,7 +93,7 @@ Blizzard 的被动控制编组 UI 只提供组号、队长类型和总数量，�
 - 建筑和降落位置使用官方 `RequestQueryBuildingPlacement` 预检；资源、科技、类型、形态或落点不满足时立即返回失败原因。
 - SC2 返回的即时和 Observation Action Error 都会写入日志并反馈到对应任务。
 
-当前 133 项回归测试覆盖模糊中英文解析、固定界面语种转写、随机可移动主体、隐式/随机生产者、三族开二矿推断、附近可见气矿、批量官方落点查询、新单位完成事件、动态 tag 绑定、控制编组数量触发、环境噪声校准与持续噪声强制切句、三族单位/建筑/科技别名、官方 ability remap 与目标约束、Warpgate 落点、Zerg Larva 刷新、建筑变形、`add_on_tag` 研究路由、生产/建筑/科技进度、持续任务幂等/并行/抢占、控制接口、多电脑与多人官方 `PlayerSetup`/`JoinGame` 拓扑、GUI 多语言设置与资源打包、菜单轮询隔离，以及官方 SC2Map 内嵌截图解析。最新桌面程序构建为 `AISC2CommanderGUI.exe`。
+当前 140 项回归测试覆盖模糊中英文解析、三族农民定量采集矿脉/瓦斯、建造采气设施与采气意图消歧、SC2 领域语音 hotwords 与近音术语纠正、固定界面语种转写、随机可移动主体、隐式/随机生产者、三族开二矿推断、附近可见气矿、批量官方落点查询、新单位完成事件、动态 tag 绑定、控制编组数量触发、环境噪声校准与持续噪声强制切句、三族单位/建筑/科技别名、官方 ability remap 与目标约束、Warpgate 落点、Zerg Larva 刷新、建筑变形、`add_on_tag` 研究路由、生产/建筑/科技进度、持续任务幂等/并行/抢占、控制接口、多电脑与多人官方 `PlayerSetup`/`JoinGame` 拓扑、GUI 多语言设置与资源打包、菜单轮询隔离，以及官方 SC2Map 内嵌截图解析。最新桌面程序构建为 `AISC2CommanderGUI.exe`。
 
 ### 本地 Ollama / Qwen3.5
 
@@ -259,6 +259,8 @@ ai 1号部队包含5个女妖后前往B1点
 ai 让最近的农民在坐标 36 134 建造补给站
 ai 让选中的农民在坐标 42 128 建造兵营
 ai 让最近的农民在最近气矿建造精炼厂
+ai 让选中的农民采集矿脉
+ai 所有农民采集瓦斯
 ai 选择的农民在附近建一个精炼厂
 ai 让一队移动到A1
 ai 选中的建筑生产19个农民
@@ -303,6 +305,8 @@ When control group 1 has 5 Banshees, move to B1
 
 `建造` 同样使用 SCV、Probe 或 Drone 的正常 Build ability，不会 Debug 创建建筑。普通建筑可以给世界坐标/地图点位，也可以说“附近”让执行器在已解析工人的当前视野内搜索；Refinery、Assimilator 或 Extractor 可以给气矿坐标、说“最近气矿”，或说“附近”选择该工人附近当前可见且未占用的中立气矿。“选中的农民”只使用提交这条指令时选中的工人；玩家随后可以立刻选择其他单位，不会改变已排队指令绑定的 tag。没有明确指定主体时会从官方能力确认可建造的工人中选择接近目标的一个。不可放置的位置会在发出动作前被拒绝并输出 Blizzard `ActionResult` 名称。
 
+`采矿/采气` 有独立的本地规则快速路径，不调用 LLM。`选两个农民去采气` 会精确绑定两个当前可用且接近目标的农民，不会扩散成全部农民。执行器只使用 Blizzard `QueryAvailableAbilities` 返回的正常 Gather/Smart ability：采矿目标严格限制为当前 Observation 可见的中立 MineralField 变体，采气目标严格限制为已完成的我方 Refinery、Assimilator 或 Extractor；多个农民会结合距离和当前采集负载分配目标，不会把中立气泉或其他中立单位误当成矿脉。包含“建/造/盖”等建筑动词时优先解释为气矿设施建造；`建造采气场` 会按当前种族生成 Refinery、Assimilator 或 Extractor，并自动选择可见气泉。
+
 每条 GUI 指令都有 `CMD-0001` 形式的任务编号。生产任务根据最新 Observation 显示 `已完成/目标数`，资源、人口或生产队列不足时会显示具体等待原因。建筑命令在 SCV 出发前完成资源、科技、地图范围和官方 `RequestQueryBuildingPlacement` 预检；通过后继续显示“前往建造点”和建筑 `build_progress`。若农民被重新操作、死亡，或 180 秒仍未完成，任务会明确终止，不会无限保持无反馈状态。
 
 作战单位覆盖标准 Melee 三族单位。Terran 的常用形态提供快速中文规则；Protoss/Zerg 以及装卸、取消、注卵、时空加速、菌毯、范围技能和单位目标技能走通用官方能力解析。每次动作都必须同时满足：当前单位存在、`QueryAvailableAbilities` 返回该能力、`AbilityData.target` 与指令目标一致。
@@ -319,7 +323,7 @@ ai 让选中的枪兵移动到坐标 36 134
 
 游戏内聊天只接受当前我方 `player_id` 发出的消息。默认终端不再每秒打印完整单位列表，避免覆盖输入行；完整 Observation 和单位位置仍按原频率写入 `logs/aisc2commander.log`。需要主动查看终端快照时输入 `list`，或使用 `--verbose` 恢复 DEBUG 控制台输出。
 
-桌面 GUI 不使用 Windows 语音识别。“开始录音”适合先说、再检查和编辑文字；“开始监听”适合对局中免点击连续下令。语音识别语言完全跟随“设置 → 多语言”，不会额外运行自动语言检测：English 只识别英文，简体/繁体中文只识别中文；当前监听中的转写器保持不变，切换界面语言后下一次开始录音或监听时会按新语言重建。持续监听时，麦克风采集到项目内置的自适应 RMS 切句器；它不是 faster-whisper 提供的第三方 VAD。开始监听后的前 1 秒会校准环境噪声，此时界面提示保持安静；之后使用分离的开始/结束阈值，避免风扇或游戏外放一旦触发后始终无法断句。VAD 只在检测到语音并遇到句尾静音时生成 WAV，因此监听静音不会请求 LLM 或消耗云端 Token。本地 Whisper 在隔离进程中只加载一次，随后逐句转写；Whisper 与 Blizzard proto 使用不同虚拟环境，避免 protobuf 版本冲突。监听模式的每句转写结果会自动进入和键盘发送相同的顺序队列。
+桌面 GUI 不使用 Windows 语音识别。“开始录音”适合先说、再检查和编辑文字；“开始监听”适合对局中免点击连续下令。语音识别语言完全跟随“设置 → 多语言”，不会额外运行自动语言检测：English 只识别英文，简体/繁体中文只识别中文；当前监听中的转写器保持不变，切换界面语言后下一次开始录音或监听时会按新语言重建。本地 faster-whisper 使用扩展的 SC2 单位、建筑、资源、操作、俚语和地图点位 hotwords，并提高 beam search；转写完成后只对日志验证过的非标准近音词（如“采计”“京恋场”“京链厂”“精炼场”）做保守术语纠正，“采集”这类本身合法的词不会被擅自改成“采气”。持续监听时，麦克风采集到项目内置的自适应 RMS 切句器；它不是 faster-whisper 提供的第三方 VAD。开始监听后的前 1 秒会校准环境噪声，此时界面提示保持安静；之后使用分离的开始/结束阈值，避免风扇或游戏外放一旦触发后始终无法断句。VAD 只在检测到语音并遇到句尾静音时生成 WAV，因此监听静音不会请求 LLM 或消耗云端 Token。本地 Whisper 在隔离进程中只加载一次，随后逐句转写；Whisper 与 Blizzard proto 使用不同虚拟环境，避免 protobuf 版本冲突。监听模式的每句转写结果会自动进入和键盘发送相同的顺序队列。
 
 切句参数位于 `config/voice.env`：
 

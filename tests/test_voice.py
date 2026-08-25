@@ -11,6 +11,11 @@ from aisc2commander.agent.voice import (
     VoiceActivitySegmenter,
     VoiceCommandListener,
 )
+from aisc2commander.voice_terms import (
+    normalize_sc2_transcript,
+    transcription_hotwords,
+)
+from scripts.transcribe_local import _transcribe as transcribe_local
 
 
 class _FakeAudio:
@@ -247,3 +252,40 @@ def test_openai_transcriber_uses_fixed_english_without_language_detection(tmp_pa
 def test_transcriber_rejects_automatic_language_detection() -> None:
     with pytest.raises(ValueError, match="zh or en"):
         OpenAITranscriber(client=SimpleNamespace(), language="auto")
+
+
+def test_sc2_voice_terms_prioritize_domain_words_and_fix_logged_homophones() -> None:
+    hotwords = transcription_hotwords("zh")
+    assert "采气" in hotwords
+    assert "精炼厂" in hotwords
+    assert "京恋场" not in hotwords
+
+    assert normalize_sc2_transcript("选一个农民去附近建京恋场。") == (
+        "选一个农民去附近建精炼厂。"
+    )
+    assert normalize_sc2_transcript("选三个农民去采计") == "选三个农民去采气"
+    assert normalize_sc2_transcript("选一个农民去旁边建材气场") == (
+        "选一个农民去旁边建造精炼厂"
+    )
+    # “采集”本身是合法命令，不能无条件猜成“采气”。
+    assert normalize_sc2_transcript("让农民采集") == "让农民采集"
+
+
+def test_local_whisper_receives_sc2_hotwords_and_expanded_prompt(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeModel:
+        def transcribe(self, path, **kwargs):
+            captured.update(kwargs)
+            return [SimpleNamespace(text=" 选两个农民去采气")], SimpleNamespace(language="zh")
+
+    audio = tmp_path / "voice.wav"
+    audio.write_bytes(b"RIFF-test")
+    payload = transcribe_local(FakeModel(), audio, "zh")
+
+    assert payload["text"] == "选两个农民去采气"
+    assert captured["beam_size"] == 8
+    assert "采气" in str(captured["hotwords"])
+    assert "精炼厂" in str(captured["hotwords"])
+    assert "精炼厂" in str(captured["initial_prompt"])
+    assert "准确区分采气、采矿、采集" in str(captured["initial_prompt"])

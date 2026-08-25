@@ -13,6 +13,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
+from ..voice_terms import normalize_sc2_transcript, transcription_prompt
+
 
 LOG = logging.getLogger(__name__)
 
@@ -565,26 +567,21 @@ class OpenAITranscriber:
 
     def transcribe(self, path: Path) -> str:
         with path.open("rb") as audio_file:
-            prompt = (
-                "StarCraft II English tactical commands. Terms: Marine, Marauder, SCV, "
-                "Banshee, Barracks, Command Center, Supply Depot, control group, move, "
-                "attack, train, build, research, A1, A2."
-                if self.language == "en"
-                else "星际争霸2中文战术指令。常见词：陆战队员、枪兵、劫掠者、农民、女妖、"
-                "兵营、指挥中心、补给站、编组、移动、攻击、生产、建造、升级、A1、A2。"
-            )
             request: dict[str, Any] = {
                 "model": self.model,
                 "file": audio_file,
-                "prompt": prompt,
+                "prompt": transcription_prompt(self.language),
             }
             request["language"] = self.language
             result = self.client.audio.transcriptions.create(
                 **request,
             )
-        text = str(result.text).strip()
+        raw_text = str(result.text).strip()
+        text = normalize_sc2_transcript(raw_text, self.language)
         if not text:
             raise ValueError("语音转写结果为空")
+        if text != raw_text:
+            LOG.info("SC2 voice terminology normalized: raw=%r corrected=%r", raw_text, text)
         return text
 
 
@@ -635,9 +632,12 @@ class LocalWhisperTranscriber:
                 raise RuntimeError(f"本地 Whisper 返回了无效结果：{line[-500:]}") from error
             if payload.get("error"):
                 raise RuntimeError(str(payload["error"])[-1500:])
-            text = str(payload.get("text", "")).strip()
+            raw_text = str(payload.get("text", "")).strip()
+            text = normalize_sc2_transcript(raw_text, self.language)
             if not text:
                 raise ValueError("语音转写结果为空")
+            if text != raw_text:
+                LOG.info("SC2 voice terminology normalized: raw=%r corrected=%r", raw_text, text)
             return text
 
     def close(self) -> None:

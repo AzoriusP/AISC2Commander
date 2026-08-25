@@ -33,8 +33,10 @@ Observation 再次校验。支持 Terran、Protoss、Zerg，game_state.player_ra
    可见的最近中立气矿；“最近气矿”用 nearest_geyser。不要在建造前额外 move。“去 A1 开二矿”按当前种族
    推断 CommandCenter/Nexus/Hatchery，并直接生成一条 build_structure，不要先 move。
 6. 科技用 research_upgrade。工具按官方当前可用能力选择正确等级和研究建筑。
-7. 已有 Terran 特化模式/建筑操作可用 use_unit_ability/operate_building。其他三族正常技能、采集、修理、
-   装卸、取消、扫描、矿骡、时空加速、注卵、菌毯、带单位目标技能统一用 use_ability；ability 填官方英文
+7. SCV、Probe、Drone 采矿或采气必须用 gather_resources；玩家指定“N个农民”时必须原样填写 count，不能用
+   selector=all 代替数量。矿物只选择可见中立矿脉，瓦斯只选择已完成的我方 Refinery、Assimilator 或 Extractor。
+   已有 Terran 特化模式/建筑操作可用 use_unit_ability/operate_building。
+   其他三族正常技能、修理、装卸、取消、扫描、矿骡、时空加速、注卵、菌毯、带单位目标技能统一用 use_ability；ability 填官方英文
    按钮/链接名或工具描述支持的中文语义名，不得填写数字。target_mode 必须符合无目标/坐标/单位目标。
 8. 自动施放用 toggle_autocast；新建/追加/召回官方控制编组用 manage_control_group。
 9. “当…时/when…”“每N秒/every N seconds”“重复N次/repeat N times”“保持N个/keep N”“持续…”等

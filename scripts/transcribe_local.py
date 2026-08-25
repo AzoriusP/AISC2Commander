@@ -6,21 +6,21 @@ import sys
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from aisc2commander.voice_terms import transcription_hotwords, transcription_prompt
+
+
 def _transcribe(model, audio: Path, language: str = "zh") -> dict[str, str]:
     if not audio.is_file():
         raise FileNotFoundError(f"Audio file not found: {audio}")
-    prompt = (
-        "StarCraft II English tactical commands: Marine, Marauder, SCV, Banshee, "
-        "Barracks, Command Center, Supply Depot, control group, move, attack, train, "
-        "build, research, A1, A2."
-        if language == "en"
-        else "星际争霸二中文战术指令：陆战队员、枪兵、劫掠者、农民、女妖、兵营、"
-        "指挥中心、补给站、编组、移动、攻击、生产、建造、升级、A1、A2。"
-    )
     kwargs = {
-        "beam_size": 5,
+        "beam_size": 8,
+        "patience": 1.2,
         "vad_filter": True,
-        "initial_prompt": prompt,
+        "initial_prompt": transcription_prompt(language),
+        "hotwords": transcription_hotwords(language),
     }
     kwargs["language"] = language
     segments, info = model.transcribe(str(audio), **kwargs)

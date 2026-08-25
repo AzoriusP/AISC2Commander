@@ -68,7 +68,10 @@ STRUCTURE_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("轨道指挥部", "轨道基地", "orbitalcommand"), "OrbitalCommand"),
     (("行星要塞", "planetaryfortress"), "PlanetaryFortress"),
     (("补给站", "补给点", "人口房", "房子", "supplydepot"), "SupplyDepot"),
-    (("精炼厂", "炼油厂", "采气", "refinery"), "Refinery"),
+    ((
+        "精炼厂", "精炼场", "精练厂", "精练场", "京恋场", "京链厂", "京炼厂",
+        "炼油厂", "采气场", "采气厂", "气矿建筑", "采气", "refinery",
+    ), "Refinery"),
     (("兵营", "barracks"), "Barracks"),
     (("工程站", "engineeringbay"), "EngineeringBay"),
     (("地堡", "碉堡", "bunker"), "Bunker"),
@@ -331,6 +334,19 @@ class RulePlanner:
         if building_morph is not None:
             source, ability = building_morph
             return self._building_morph(text, normalized, source, ability)
+        structure_type = _expansion_structure(normalized, state) or _race_aware_structure_type(
+            normalized,
+            state,
+        )
+        # A phrase such as “建造采气场” contains “采气”, but its explicit build
+        # verb is authoritative. Resolve it before the gathering fast path.
+        if structure_type is not None and _has_build_intent(normalized):
+            return self._build(text, normalized, structure_type)
+        gather_resource = _gather_resource(normalized)
+        if gather_resource is not None:
+            if gather_resource == "ambiguous":
+                return self._clarify(text, "要让农民采集矿物还是瓦斯？")
+            return self._gather(text, normalized, state, gather_resource)
         generic_ability = _generic_ability(normalized)
         if generic_ability is not None:
             return self._generic_ability(text, normalized, generic_ability)
@@ -342,7 +358,6 @@ class RulePlanner:
         unit_ability = _unit_ability(normalized)
         if unit_ability is not None:
             return self._unit_ability(text, normalized, unit_ability)
-        structure_type = _expansion_structure(normalized, state) or _structure_type(normalized)
         # “建造/造几个农民”在中文对局语境中表示训练 SCV；如果句中也有
         # “补给站”等建筑名称，则仍然优先按建筑指令解析。
         if structure_type is None and _unit_type(normalized) is not None and any(
@@ -461,8 +476,12 @@ class RulePlanner:
     def _build(self, original: str, text: str, structure_type: str) -> AgentPlan:
         coordinate = _coordinate(text)
         point_name = _map_point(text, state=None)
-        nearest_geyser = structure_type in {"Refinery", "Assimilator", "Extractor"} and "最近" in text
+        gas_structure = structure_type in {"Refinery", "Assimilator", "Extractor"}
         nearby = any(word in text for word in ("附近", "旁边", "周围", "就近"))
+        nearest_geyser = gas_structure and (
+            "最近" in text
+            or (coordinate is None and point_name is None and not nearby)
+        )
         if coordinate is None and point_name is None and not nearest_geyser and not nearby:
             return self._clarify(original, "建筑放在哪里？请给世界坐标；精炼厂也可以说建在最近气矿。")
         call = AgentToolCall(
@@ -486,6 +505,59 @@ class RulePlanner:
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析建造指令。")
+
+    def _gather(
+        self,
+        original: str,
+        text: str,
+        state: AgentGameState,
+        resource: str,
+    ) -> AgentPlan:
+        explicit_type = _race_aware_unit_type(text, state)
+        if explicit_type is not None and explicit_type not in {"SCV", "Probe", "Drone"}:
+            return self._clarify(original, "采集资源的主体必须是 SCV、探机或工蜂。")
+        worker_type = explicit_type or {
+            "protoss": "Probe",
+            "zerg": "Drone",
+        }.get(state.player_race, "SCV")
+        control_group = _control_group(text)
+        requested_count = _worker_count(text)
+        explicit_worker_subject = _unit_type(text) is not None
+        selected_counts = state.selection.get("counts", {})
+        selected_worker = bool(
+            isinstance(selected_counts, dict)
+            and int(selected_counts.get(worker_type, 0) or 0) > 0
+        )
+        if control_group is not None:
+            selector = "control_group"
+        elif any(
+            word in text
+            for word in ("这些", "他们", "它们", "选中", "选择的", "当前", "这个", "该农民")
+        ) or (not explicit_worker_subject and selected_worker):
+            selector = "selected"
+        elif _requests_one_random_unit(text):
+            selector = "random"
+        else:
+            selector = "all"
+        call = AgentToolCall(
+            "gather_resources",
+            {
+                "selector": selector,
+                "control_group": control_group,
+                "worker_type": worker_type,
+                "resource": resource,
+                "count": requested_count,
+                "queue": _queue_requested(text),
+            },
+        )
+        resource_name = "矿物" if resource == "minerals" else "瓦斯"
+        return AgentPlan(
+            original,
+            "rules",
+            self.model,
+            (call,),
+            f"已解析农民采集{resource_name}指令。",
+        )
 
     def _generic_ability(self, original: str, text: str, ability: str) -> AgentPlan:
         source_type = _unit_type(text)
@@ -706,6 +778,28 @@ def _structure_type(text: str) -> str | None:
     return None
 
 
+def _race_aware_structure_type(text: str, state: AgentGameState) -> str | None:
+    structure_type = _structure_type(text)
+    if structure_type == "Refinery":
+        return {
+            "protoss": "Assimilator",
+            "zerg": "Extractor",
+        }.get(state.player_race, "Refinery")
+    return structure_type
+
+
+def _has_build_intent(text: str) -> bool:
+    if any(word in text for word in ("建造", "修建", "建设", "盖一个", "盖座", "放一个")):
+        return True
+    return bool(
+        re.search(
+            r"(?:^|去|在|让|派|到|旁边|附近|周围|就近)\s*[建造]"
+            r"|[建造](?:一个|个|一座|座)",
+            text,
+        )
+    )
+
+
 def _contains_synonym(text: str, name: str) -> bool:
     if name in text:
         return True
@@ -856,6 +950,23 @@ def _count(text: str) -> int:
     return 1
 
 
+def _worker_count(text: str) -> int | None:
+    worker_words = r"(?:个|名|只)?\s*(?:农民|工人|scv|probe|drone|探机|工蜂|worker|workers)"
+    numeric = re.search(rf"(\d{{1,3}})\s*{worker_words}", text)
+    if numeric:
+        return max(1, min(200, int(numeric.group(1))))
+    chinese = re.search(rf"([一二两三四五六七八九十]{{1,3}})\s*{worker_words}", text)
+    if chinese:
+        return max(1, min(200, _chinese_number(chinese.group(1))))
+    english = re.search(
+        rf"\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        rf"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+"
+        rf"(?:worker|workers|scv|probe|drone)s?\b",
+        text,
+    )
+    return _english_number(english.group(1)) if english else None
+
+
 def _chinese_number(value: str) -> int:
     digits = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
     if value == "十":
@@ -938,6 +1049,39 @@ def _generic_ability(text: str) -> str | None:
     for synonyms, ability in GENERIC_ABILITY_SYNONYMS:
         if any(value in text for value in synonyms):
             return ability
+    return None
+
+
+def _gather_resource(text: str) -> str | None:
+    if _has_build_intent(text):
+        return None
+    gas_action = any(
+        phrase in text
+        for phrase in ("采气", "挖气", "采瓦斯", "挖瓦斯", "收集瓦斯", "gather gas", "harvest gas")
+    )
+    mineral_action = any(
+        phrase in text
+        for phrase in (
+            "采矿", "挖矿", "采集矿", "收集矿", "采水晶", "挖水晶",
+            "gather mineral", "harvest mineral", "mine mineral",
+        )
+    )
+    generic_action = any(word in text for word in ("采集", "收集", "gather", "harvest"))
+    gas_target = any(word in text for word in ("气矿", "瓦斯", "vespene", "gas"))
+    mineral_target = any(
+        word in text
+        for word in ("矿脉", "矿物", "晶体矿", "水晶矿", "蓝矿", "黄矿", "mineral")
+    )
+    wants_gas = gas_action or (generic_action and gas_target)
+    wants_minerals = mineral_action or (generic_action and mineral_target)
+    if wants_gas and wants_minerals:
+        return "ambiguous"
+    if wants_gas:
+        return "vespene"
+    if wants_minerals:
+        return "minerals"
+    if generic_action:
+        return "ambiguous"
     return None
 
 
