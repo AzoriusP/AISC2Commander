@@ -551,8 +551,12 @@ class OpenAITranscriber:
         model: str = "gpt-transcribe",
         client: Any | None = None,
         api_key: str | None = None,
+        language: str = "zh",
     ) -> None:
         self.model = model
+        self.language = language.strip().casefold() or "zh"
+        if self.language not in {"zh", "en"}:
+            raise ValueError("transcription language must be zh or en")
         if client is None:
             from openai import OpenAI
 
@@ -561,14 +565,22 @@ class OpenAITranscriber:
 
     def transcribe(self, path: Path) -> str:
         with path.open("rb") as audio_file:
+            prompt = (
+                "StarCraft II English tactical commands. Terms: Marine, Marauder, SCV, "
+                "Banshee, Barracks, Command Center, Supply Depot, control group, move, "
+                "attack, train, build, research, A1, A2."
+                if self.language == "en"
+                else "星际争霸2中文战术指令。常见词：陆战队员、枪兵、劫掠者、农民、女妖、"
+                "兵营、指挥中心、补给站、编组、移动、攻击、生产、建造、升级、A1、A2。"
+            )
+            request: dict[str, Any] = {
+                "model": self.model,
+                "file": audio_file,
+                "prompt": prompt,
+            }
+            request["language"] = self.language
             result = self.client.audio.transcriptions.create(
-                model=self.model,
-                file=audio_file,
-                language="zh",
-                prompt=(
-                    "星际争霸2 中文战术指令。常见词：陆战队员、枪兵、劫掠者、兵营、"
-                    "指挥中心、移动、攻击、生产、坐标。"
-                ),
+                **request,
             )
         text = str(result.text).strip()
         if not text:
@@ -579,9 +591,17 @@ class OpenAITranscriber:
 class LocalWhisperTranscriber:
     """Keep faster-whisper resident in its isolated environment."""
 
-    def __init__(self, project_root: Path, model: str = "small") -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        model: str = "small",
+        language: str = "zh",
+    ) -> None:
         self.project_root = project_root
         self.model = model
+        self.language = language.strip().casefold() or "zh"
+        if self.language not in {"zh", "en"}:
+            raise ValueError("transcription language must be zh or en")
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._responses: queue.Queue[str | None] = queue.Queue()
@@ -671,6 +691,8 @@ class LocalWhisperTranscriber:
                 self.model,
                 "--model-dir",
                 str(self.project_root / "models" / "whisper"),
+                "--language",
+                self.language,
             ],
             cwd=self.project_root,
             stdin=subprocess.PIPE,

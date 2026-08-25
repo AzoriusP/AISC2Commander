@@ -352,7 +352,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "name": "schedule_task",
         "description": (
             "Create an Observation-driven once/repeat/maintain task. action_text must be "
-            "one deterministic Chinese game command that the local rule planner can execute. "
+            "one deterministic Chinese or English game command that the local rule planner can execute. "
             "unit_created means units completed after task creation and dynamically binds their "
             "tags to a selected-subject action. control_group_count uses official passive UI "
             "group leader type and total count; it is exact for homogeneous groups. "

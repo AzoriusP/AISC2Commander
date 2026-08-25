@@ -1,6 +1,6 @@
 # StarCraft II AI Commander
 
-这是一个只使用 Blizzard 官方 StarCraft II API 的 Windows 玩法验证原型。它以 realtime 模式读取 Observation，显示资源、单位、orders、API Action Error、当前选择和官方控制编组。独立 Agent Harness 已覆盖 Terran、Protoss、Zerg 标准 Melee 的移动、攻击、生产/变形、工人建造、科技、编组和官方当前可用能力，并提供带条件、重复、保持、并行、优先级和抢占的持续任务；桌面界面还提供地图点位编辑与本地 Whisper 中文语音转写。
+这是一个只使用 Blizzard 官方 StarCraft II API 的 Windows 玩法验证原型。它以 realtime 模式读取 Observation，显示资源、单位、orders、API Action Error、当前选择和官方控制编组。独立 Agent Harness 已覆盖 Terran、Protoss、Zerg 标准 Melee 的移动、攻击、生产/变形、工人建造、科技、编组和官方当前可用能力，并提供带条件、重复、保持、并行、优先级和抢占的持续任务；桌面界面还提供地图点位编辑与本地 Whisper 中英文语音转写。
 
 ## 合规与架构
 
@@ -16,12 +16,12 @@
 Harness 位于 `src/aisc2commander/agent/`，与 SC2 通信模块分离：
 
 ```text
-中文文本 / 持续语音监听
+中文或英文文本 / 持续语音监听
         │
         ├─ 本地 VAD 静音切句
         ├─ 常驻 faster-whisper（默认）/ gpt-transcribe（可选）
         ▼
-本地中文规则快速路径 / Ollama Qwen / GPT-5.6 fallback
+本地中英文规则快速路径 / Ollama Qwen / GPT-5.6 fallback
         │  只允许结构化工具调用
         ▼
 AgentActionExecutor（最新 Observation 再校验）
@@ -44,9 +44,9 @@ SC2Session（官方 protobuf / WebSocket）
 - 等待触发任务不会逐帧调用 LLM，也不会发送额外 SC2 查询；每个已有 Observation 只建立一次单位数量、单位 tag 和控制编组索引，所有等待条件共享该索引，满足后才派发一次后续动作。
 - 任何即时或延迟 API Action Error 都写入详细日志。
 
-模型接口采用 OpenAI 官方 [Responses API function calling](https://developers.openai.com/api/docs/guides/function-calling) 的严格 function tools。[`gpt-5.6`](https://developers.openai.com/api/docs/models/gpt-5.6-sol) 本身在此流程中接收文本；短语音先按官方 [speech-to-text](https://developers.openai.com/api/docs/guides/speech-to-text) 流程用 `gpt-transcribe` 变成中文文本。模型与转写调用都在后台线程运行，不阻塞 realtime Observation 循环。
+模型接口采用 OpenAI 官方 [Responses API function calling](https://developers.openai.com/api/docs/guides/function-calling) 的严格 function tools。[`gpt-5.6`](https://developers.openai.com/api/docs/models/gpt-5.6-sol) 本身在此流程中接收文本；短语音先按官方 [speech-to-text](https://developers.openai.com/api/docs/guides/speech-to-text) 流程用 `gpt-transcribe` 变成界面所选语言的文本。模型与转写调用都在后台线程运行，不阻塞 realtime Observation 循环。
 
-Harness 始终先使用 `zh-rules-v1` 尝试确定性快速解析，即使已经配置 Ollama/OpenAI 也不会让所有指令都经过 LLM。规则能够完整生成白名单工具调用时直接执行，例如“选中的建筑制造 5 个农民”“来一个农民去 A1”“刷 5 个机枪兵”“去 A1 开二矿”；规则无法完整覆盖的新口语才携带当前选择、单位计数、种族、地图点位和最近计划交给 Ollama/OpenAI 推断。LLM 可以省略具体 unit tag，并用 `random`、`any_available`、`nearest`、`nearby` 表达模糊主体；执行器随后在最新 Observation 中解析兼容对象并再次验证，避免模型臆造单位。只有动作、目标或多个高风险解释无法由游戏状态消歧时才询问玩家。当前仓库的 `config/llm.env` 已按本机需求显式设为 `ollama`。
+Harness 始终先使用 `zh-rules-v1` 尝试中英文确定性快速解析，即使已经配置 Ollama/OpenAI 也不会让所有指令都经过 LLM。规则能够完整生成白名单工具调用时直接执行，例如“选中的建筑制造 5 个农民”“来一个农民去 A1”“刷 5 个机枪兵”“去 A1 开二矿”，以及 `Move the selected Marines to A1`、`Train five Marines`、`Build a Supply Depot at A1`；规则无法完整覆盖的新口语才携带当前选择、单位计数、种族、地图点位和最近计划交给 Ollama/OpenAI 推断。LLM 可以省略具体 unit tag，并用 `random`、`any_available`、`nearest`、`nearby` 表达模糊主体；执行器随后在最新 Observation 中解析兼容对象并再次验证，避免模型臆造单位。只有动作、目标或多个高风险解释无法由游戏状态消歧时才询问玩家。当前仓库的 `config/llm.env` 已按本机需求显式设为 `ollama`。
 
 模糊指令的当前语义包括：
 
@@ -91,7 +91,7 @@ Blizzard 的被动控制编组 UI 只提供组号、队长类型和总数量，�
 - 建筑和降落位置使用官方 `RequestQueryBuildingPlacement` 预检；资源、科技、类型、形态或落点不满足时立即返回失败原因。
 - SC2 返回的即时和 Observation Action Error 都会写入日志并反馈到对应任务。
 
-当前 123 项回归测试覆盖模糊中文解析、随机可移动主体、隐式/随机生产者、三族开二矿推断、附近可见气矿、批量官方落点查询、新单位完成事件、动态 tag 绑定、控制编组数量触发、环境噪声校准与持续噪声强制切句、三族单位/建筑/科技别名、官方 ability remap 与目标约束、Warpgate 落点、Zerg Larva 刷新、建筑变形、`add_on_tag` 研究路由、生产/建筑/科技进度、持续任务幂等/并行/抢占、控制接口、多电脑与多人官方 `PlayerSetup`/`JoinGame` 拓扑，以及官方 SC2Map 内嵌截图解析。最新桌面程序构建为 `AISC2CommanderGUI.exe`。
+当前 133 项回归测试覆盖模糊中英文解析、固定界面语种转写、随机可移动主体、隐式/随机生产者、三族开二矿推断、附近可见气矿、批量官方落点查询、新单位完成事件、动态 tag 绑定、控制编组数量触发、环境噪声校准与持续噪声强制切句、三族单位/建筑/科技别名、官方 ability remap 与目标约束、Warpgate 落点、Zerg Larva 刷新、建筑变形、`add_on_tag` 研究路由、生产/建筑/科技进度、持续任务幂等/并行/抢占、控制接口、多电脑与多人官方 `PlayerSetup`/`JoinGame` 拓扑、GUI 多语言设置与资源打包、菜单轮询隔离，以及官方 SC2Map 内嵌截图解析。最新桌面程序构建为 `AISC2CommanderGUI.exe`。
 
 ### 本地 Ollama / Qwen3.5
 
@@ -125,7 +125,7 @@ ollama list
 
 程序会在启动 SC2 之前检查 Ollama endpoint 和模型 tag。无法连接或模型不存在时会立即停止并给出已检测到的模型，不会先打开游戏。Qwen 推理在 Agent 后台线程运行，不阻塞 realtime Observation。
 
-本地 Ollama 只替换“中文文本 → 游戏工具计划”这一段；当前 Qwen 模型没有音频输入能力。桌面 GUI 默认先用隔离运行环境中的 `faster-whisper small` 在本机转写，再把文字交给 Qwen。它不使用 Windows `System.Speech`，也不需要 OpenAI Key。需要云端转写时可在 `config/voice.env` 中改为 `VOICE_TRANSCRIPTION_PROVIDER=openai`。
+本地 Ollama 只替换“自然语言文本 → 游戏工具计划”这一段；当前 Qwen 模型没有音频输入能力。桌面 GUI 默认先用隔离运行环境中的 `faster-whisper small` 在本机转写，再把文字交给 Qwen。它不使用 Windows `System.Speech`，也不需要 OpenAI Key。需要云端转写时可在 `config/voice.env` 中改为 `VOICE_TRANSCRIPTION_PROVIDER=openai`。
 
 ## 安装与运行
 
@@ -152,7 +152,9 @@ AISC2CommanderGUI.exe
 - 启动时界面会持续探测本地控制接口；首次连接失败不会让状态卡死，成功后显示“已连接”，超过 60 秒仍未就绪会明确显示启动失败。
 - 主界面的“指令运行状态”按编号显示每条命令的排队、规则优先解析、规则预检、执行、持续等待、完成或终止状态；计划生成后会显示“本地规则”或实际模型 provider。短时间连续发送的命令按 FIFO 顺序执行，不会静默互相打断。
 - 点击“强制停止”：先请求 Commander 正常退出并通过官方 SC2 API 关闭游戏；8 秒内未退出时，只按本次启动所记录并校验过的精确 PID 终止 Commander、SC2 和对应 PowerShell 进程。
-- 点击“配置 API Key”：在弹窗中输入 OpenAI API Key 并保存到 `config/openai.env`。保存后弹窗自动关闭，消息区显示脱敏后的配置、保存位置和生效提示；已经运行的项目需停止并重新启动。
+- 从顶部“设置 → 配置 API Key”打开密钥弹窗；保存位置仍为 `config/openai.env`，保存后弹窗自动关闭，消息区显示脱敏后的配置和生效提示，已经运行的项目需停止并重新启动。主界面不再重复显示 API Key 按钮。
+- “设置 → 多语言”可以切换简体中文、繁體中文和 English；选择保存在 `config/gui_settings.json`，重新打开程序后仍会生效。语音不做中英自动检测：English 界面固定传给转写器 `en`，简体/繁体中文界面固定传入 `zh`；切换后从下一次录音或监听会话生效。
+- “设置 → 关于”显示项目介绍、GitHub 地址和支付宝／微信支持二维码。项目仓库地址填写在 `config/about.json` 的 `github_url`；二维码资源位于 `assets/about/`，并会随单文件 GUI EXE 一同打包。
 - 在底部输入自然语言，点击“发送指令”或按 `Ctrl+Enter`。
 - 点击“开始录音”：手动开始录制一段语音，再次点击“停止录音”后转写到文字输入框；普通指令不会自动发送，可以先修改再点击“发送指令”。精确匹配的战术指令集名称、别名或计划控制口令会直接发送。
 - 对局连接后点击“开始监听”：麦克风保持监听，按钮切换为“停止监听”。本地 VAD 检测到默认约 0.8 秒静音后自动切分一句，不需要再次点击按钮。
@@ -227,7 +229,7 @@ select-army-test
 
 前者使用官方 `DebugCreateUnit`，后者使用官方 `ActionSelectArmy`。它们只用于测试，不是 selection workaround。
 
-## 中文和语音控制
+## 中英文和语音控制
 
 游戏运行后，在同一个终端输入：
 
@@ -273,6 +275,19 @@ ai 查看持续任务
 
 中文行也可以不写 `ai` 前缀。`生产` 使用正常 Train ability。数量目标会持续保留：资源、人口或生产队列暂时不足时显示“等待”，条件满足后继续，直到 Observation 确认新增数量达到目标；不会生成 CHEAT 提示。
 
+常用英文命令也会先走本地规则快速路径，例如：
+
+```text
+Move the selected Marines to A1
+Train five Marines
+Build a Supply Depot at A1
+Attack the nearest enemy with all Marines
+Research Stimpack
+Control group 1 move to B1
+When the first worker is ready, build a Supply Depot at A1
+When control group 1 has 5 Banshees, move to B1
+```
+
 `建造` 同样使用 SCV、Probe 或 Drone 的正常 Build ability，不会 Debug 创建建筑。普通建筑可以给世界坐标/地图点位，也可以说“附近”让执行器在已解析工人的当前视野内搜索；Refinery、Assimilator 或 Extractor 可以给气矿坐标、说“最近气矿”，或说“附近”选择该工人附近当前可见且未占用的中立气矿。“选中的农民”只使用提交这条指令时选中的工人；玩家随后可以立刻选择其他单位，不会改变已排队指令绑定的 tag。没有明确指定主体时会从官方能力确认可建造的工人中选择接近目标的一个。不可放置的位置会在发出动作前被拒绝并输出 Blizzard `ActionResult` 名称。
 
 每条 GUI 指令都有 `CMD-0001` 形式的任务编号。生产任务根据最新 Observation 显示 `已完成/目标数`，资源、人口或生产队列不足时会显示具体等待原因。建筑命令在 SCV 出发前完成资源、科技、地图范围和官方 `RequestQueryBuildingPlacement` 预检；通过后继续显示“前往建造点”和建筑 `build_progress`。若农民被重新操作、死亡，或 180 秒仍未完成，任务会明确终止，不会无限保持无反馈状态。
@@ -291,7 +306,7 @@ ai 让选中的枪兵移动到坐标 36 134
 
 游戏内聊天只接受当前我方 `player_id` 发出的消息。默认终端不再每秒打印完整单位列表，避免覆盖输入行；完整 Observation 和单位位置仍按原频率写入 `logs/aisc2commander.log`。需要主动查看终端快照时输入 `list`，或使用 `--verbose` 恢复 DEBUG 控制台输出。
 
-桌面 GUI 不使用 Windows 语音识别。“开始录音”适合先说、再检查和编辑文字；“开始监听”适合对局中免点击连续下令。持续监听时，麦克风采集到项目内置的自适应 RMS 切句器；它不是 faster-whisper 提供的第三方 VAD。开始监听后的前 1 秒会校准环境噪声，此时界面提示保持安静；之后使用分离的开始/结束阈值，避免风扇或游戏外放一旦触发后始终无法断句。VAD 只在检测到语音并遇到句尾静音时生成 WAV，因此监听静音不会请求 LLM 或消耗云端 Token。本地 Whisper 在隔离进程中只加载一次，随后逐句转写；Whisper 与 Blizzard proto 使用不同虚拟环境，避免 protobuf 版本冲突。监听模式的每句转写结果会自动进入和键盘发送相同的顺序队列。
+桌面 GUI 不使用 Windows 语音识别。“开始录音”适合先说、再检查和编辑文字；“开始监听”适合对局中免点击连续下令。语音识别语言完全跟随“设置 → 多语言”，不会额外运行自动语言检测：English 只识别英文，简体/繁体中文只识别中文；当前监听中的转写器保持不变，切换界面语言后下一次开始录音或监听时会按新语言重建。持续监听时，麦克风采集到项目内置的自适应 RMS 切句器；它不是 faster-whisper 提供的第三方 VAD。开始监听后的前 1 秒会校准环境噪声，此时界面提示保持安静；之后使用分离的开始/结束阈值，避免风扇或游戏外放一旦触发后始终无法断句。VAD 只在检测到语音并遇到句尾静音时生成 WAV，因此监听静音不会请求 LLM 或消耗云端 Token。本地 Whisper 在隔离进程中只加载一次，随后逐句转写；Whisper 与 Blizzard proto 使用不同虚拟环境，避免 protobuf 版本冲突。监听模式的每句转写结果会自动进入和键盘发送相同的顺序队列。
 
 切句参数位于 `config/voice.env`：
 

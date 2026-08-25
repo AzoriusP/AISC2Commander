@@ -13,6 +13,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 import ctypes
+import webbrowser
 from ctypes import wintypes
 from dataclasses import dataclass
 from io import BytesIO
@@ -31,6 +32,12 @@ from .agent.voice import (
     VoiceCommandListener,
 )
 from .command_plans import CommandPlanStore, parse_plan_control
+from .gui_i18n import (
+    SUPPORTED_LANGUAGES,
+    load_gui_language,
+    save_gui_language,
+    translate,
+)
 from .map_capacity import MapCapacityCache, probe_map_capacity
 from .map_points import (
     DEFAULT_PRESET_NAME,
@@ -541,15 +548,29 @@ def find_project_root() -> Path:
     raise FileNotFoundError("找不到项目目录中的 scripts\\run.ps1")
 
 
+def bundled_asset_path(project_root: Path, *parts: str) -> Path:
+    """Resolve a resource both from source and from a PyInstaller one-file build."""
+
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        bundled = Path(str(bundle_root)).joinpath(*parts)
+        if bundled.is_file():
+            return bundled
+    return project_root.joinpath(*parts)
+
+
 class CommanderGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("StarCraft II AI Commander")
-        self.root.geometry("920x780")
+        self.root.geometry("920x810")
         self.root.minsize(760, 640)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
         self.project_root = find_project_root()
+        self.gui_settings_path = self.project_root / "config" / "gui_settings.json"
+        self.language = load_gui_language(self.gui_settings_path)
+        self.language_var = tk.StringVar(value=self.language)
         load_env_file(
             self.project_root / "config" / "voice.env",
             {
@@ -583,6 +604,14 @@ class CommanderGUI:
         self.server_instance_id = ""
         self.server_ready = False
         self.poll_running = False
+        self.menu_active = False
+        self._deferred_poll_result: tuple[
+            dict[str, object] | None,
+            list[dict[str, object]],
+            dict[str, object] | None,
+            list[dict[str, object]],
+            Exception | None,
+        ] | None = None
         self.closing = False
         self.listening_running = False
         self.listening_transcribing = False
@@ -629,6 +658,10 @@ class CommanderGUI:
         self.command_plan_script: tk.Text | None = None
         self.command_plan_status: tk.StringVar | None = None
         self.command_plan_loaded_name = ""
+        self.settings_popup: tk.Toplevel | None = None
+        self.settings_language_panel: tk.Frame | None = None
+        self.language_option_buttons: dict[str, tk.Button] = {}
+        self.about_window: tk.Toplevel | None = None
         self.map_window: tk.Toplevel | None = None
         self.map_canvas: tk.Canvas | None = None
         self.map_point_list: tk.Listbox | None = None
@@ -649,11 +682,12 @@ class CommanderGUI:
         self.map_background_label = ""
         self._ui_events: queue.Queue[tuple[object, tuple[object, ...]]] = queue.Queue()
 
-        self.status_text = tk.StringVar(value="未连接")
+        self.status_text = tk.StringVar(value=self._t("status_disconnected"))
         self._configure_style()
         self._build_widgets()
-        self._enable_responsive_scaling(self.root, 920, 780, minimum=0.65)
-        self._append_message("system", "界面已启动。点击“开启对局”打开 SC2 和运行终端。")
+        self._build_menu()
+        self._enable_responsive_scaling(self.root, 920, 810, minimum=0.65)
+        self._append_message("system", self._t("startup_message"))
         self.root.after(30, self._drain_ui_events)
         self.root.after(150, self._poll)
 
@@ -673,6 +707,231 @@ class CommanderGUI:
             foreground="#b42318",
             padding=(14, 8),
         )
+
+    def _t(self, key: str, **values: object) -> str:
+        return translate(getattr(self, "language", "zh_CN"), key, **values)
+
+    def _build_menu(self) -> None:
+        """Refresh the custom settings strip without using Tk's native menu loop."""
+
+        self._close_settings_popup()
+        self.root.configure(menu="")
+        self.settings_button.configure(text=self._t("settings"))
+
+    def _toggle_settings_popup(self) -> None:
+        if self.settings_popup is not None and self.settings_popup.winfo_exists():
+            self._close_settings_popup()
+            return
+        self._open_settings_popup()
+
+    def _open_settings_popup(self) -> None:
+        self._close_settings_popup()
+        self._menu_opened()
+
+        popup = tk.Toplevel(self.root)
+        popup.withdraw()
+        popup.overrideredirect(True)
+        popup.transient(self.root)
+        popup.configure(background="#8b8b8b")
+        popup.bind("<Escape>", lambda _event: self._close_settings_popup())
+        self.settings_popup = popup
+
+        surface = tk.Frame(popup, background="#f7f7f7", borderwidth=0)
+        surface.pack(fill="both", expand=True, padx=1, pady=1)
+        main_panel = tk.Frame(surface, background="#f7f7f7", borderwidth=0)
+        main_panel.pack(side="left", fill="y")
+
+        def add_button(
+            parent: tk.Misc,
+            text: str,
+            command: object,
+            *,
+            width: int = 22,
+        ) -> tk.Button:
+            button = tk.Button(
+                parent,
+                text=text,
+                command=command,
+                width=width,
+                anchor="w",
+                background="#f7f7f7",
+                activebackground="#e5f1fb",
+                activeforeground="#111111",
+                foreground="#111111",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+                padx=13,
+                pady=7,
+                font=("Microsoft YaHei UI", 10),
+                cursor="hand2",
+            )
+            button.pack(fill="x")
+            return button
+
+        api_button = add_button(
+            main_panel,
+            self._t("configure_api_key"),
+            lambda: self._run_settings_action(self._open_api_key_dialog),
+        )
+        language_button = add_button(
+            main_panel,
+            f"{self._t('language')}  ▶",
+            self._show_language_panel,
+        )
+        language_button.bind("<Enter>", lambda _event: self._show_language_panel())
+        separator = tk.Frame(main_panel, height=1, background="#a6a6a6")
+        separator.pack(fill="x", padx=5, pady=2)
+        about_button = add_button(
+            main_panel,
+            self._t("about"),
+            lambda: self._run_settings_action(self._open_about_dialog),
+        )
+        api_button.bind("<Enter>", lambda _event: self._hide_language_panel())
+        about_button.bind("<Enter>", lambda _event: self._hide_language_panel())
+
+        language_panel = tk.Frame(
+            surface,
+            background="#f7f7f7",
+            borderwidth=0,
+            highlightbackground="#8b8b8b",
+            highlightthickness=1,
+        )
+        self.settings_language_panel = language_panel
+        self.language_option_buttons = {}
+        for code, label_key in zip(
+            SUPPORTED_LANGUAGES,
+            ("language_zh_cn", "language_zh_tw", "language_en"),
+        ):
+            prefix = "✓  " if code == self.language else "    "
+            self.language_option_buttons[code] = add_button(
+                language_panel,
+                prefix + self._t(label_key),
+                lambda selected=code: self._select_popup_language(selected),
+                width=18,
+            )
+
+        popup.update_idletasks()
+        self._position_settings_popup()
+        popup.deiconify()
+        popup.lift()
+
+    def _position_settings_popup(self) -> None:
+        popup = self.settings_popup
+        if popup is None or not popup.winfo_exists():
+            return
+        popup.update_idletasks()
+        width = popup.winfo_reqwidth()
+        height = popup.winfo_reqheight()
+        x = self.settings_button.winfo_rootx()
+        y = self.settings_button.winfo_rooty() + self.settings_button.winfo_height()
+        screen_width = popup.winfo_screenwidth()
+        screen_height = popup.winfo_screenheight()
+        x = max(0, min(x, screen_width - width))
+        y = max(0, min(y, screen_height - height))
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _show_language_panel(self) -> None:
+        panel = self.settings_language_panel
+        if panel is None or not panel.winfo_exists() or panel.winfo_manager():
+            return
+        panel.pack(side="left", fill="y", padx=(1, 0))
+        self._position_settings_popup()
+
+    def _hide_language_panel(self) -> None:
+        panel = self.settings_language_panel
+        if panel is None or not panel.winfo_exists() or not panel.winfo_manager():
+            return
+        panel.pack_forget()
+        self._position_settings_popup()
+
+    def _select_popup_language(self, language: str) -> None:
+        self._close_settings_popup()
+        self._set_language(language)
+
+    def _run_settings_action(self, action: object) -> None:
+        self._close_settings_popup()
+        self.root.after_idle(action)  # type: ignore[arg-type]
+
+    def _close_settings_popup(self) -> None:
+        popup = getattr(self, "settings_popup", None)
+        self.settings_popup = None
+        self.settings_language_panel = None
+        self.language_option_buttons = {}
+        if popup is not None:
+            try:
+                if popup.winfo_exists():
+                    popup.destroy()
+            except tk.TclError:
+                pass
+        if getattr(self, "menu_active", False):
+            self._menu_closed()
+
+    def _dismiss_settings_popup_on_root_click(self, event: tk.Event[tk.Misc]) -> None:
+        popup = self.settings_popup
+        if popup is None or not popup.winfo_exists():
+            return
+        if event.widget is self.settings_button:
+            return
+        self._close_settings_popup()
+
+    def _menu_opened(self) -> None:
+        """Keep periodic UI writes from disturbing a native Windows menu."""
+
+        self.menu_active = True
+
+    def _menu_closed(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self.menu_active = False
+        deferred = self._deferred_poll_result
+        self._deferred_poll_result = None
+        if deferred is not None and not self.closing:
+            self.root.after_idle(lambda result=deferred: self._poll_finished(*result))
+
+    def _set_language(self, language: str) -> None:
+        try:
+            selected = save_gui_language(self.gui_settings_path, language)
+        except OSError as error:
+            messagebox.showerror(self._t("save_failed"), str(error), parent=self.root)
+            self.language_var.set(self.language)
+            return
+        self.language = selected
+        self.language_var.set(selected)
+        self._build_menu()
+        self._refresh_main_translations()
+        self._append_message("system", self._t("language_changed"))
+
+    def _refresh_main_translations(self) -> None:
+        self.start_button.configure(text=self._t("start_game"))
+        self.stop_button.configure(text=self._t("force_stop"))
+        self.map_button.configure(text=self._t("map_points"))
+        self.plan_button.configure(text=self._t("command_plans"))
+        self.jobs_frame.configure(text=self._t("jobs_title"))
+        self.job_tree.heading("id", text=self._t("job_id"))
+        self.job_tree.heading("status", text=self._t("job_status"))
+        self.job_tree.heading("selection", text=self._t("job_selection"))
+        self.job_tree.heading("progress", text=self._t("job_progress"))
+        self.job_tree.heading("instruction", text=self._t("job_instruction"))
+        self.messages_label.configure(text=self._t("messages"))
+        self.command_label.configure(text=self._t("command_input"))
+        self.send_button.configure(text=self._t("send_command"))
+        if self.recording_running:
+            record_text = self._t("stop_recording")
+        elif self.recording_transcribing:
+            record_text = self._t("transcribing")
+        else:
+            record_text = self._t("start_recording")
+        self.record_button.configure(text=record_text)
+        if self.listening_running:
+            listen_text = self._t("stop_listening")
+        elif self.voice_transcription_thread is not None:
+            listen_text = self._t("finishing_last")
+        else:
+            listen_text = self._t("start_listening")
+        self.listen_button.configure(text=listen_text)
+        self.status_text.set(
+            self._t("status_connected") if self.server_ready else self._t("status_disconnected")
+        )
+        self._received_jobs(self.jobs, force=True)
 
     def _enable_responsive_scaling(
         self,
@@ -700,6 +959,37 @@ class CommanderGUI:
             scaler.refresh()
 
     def _build_widgets(self) -> None:
+        self.settings_strip = tk.Frame(
+            self.root,
+            background="#ffffff",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.settings_strip.pack(fill="x")
+        self.settings_button = tk.Button(
+            self.settings_strip,
+            text=self._t("settings"),
+            command=self._toggle_settings_popup,
+            anchor="w",
+            background="#ffffff",
+            activebackground="#e5f1fb",
+            activeforeground="#111111",
+            foreground="#111111",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=8,
+            pady=2,
+            font=("Microsoft YaHei UI", 10),
+            cursor="hand2",
+        )
+        self.settings_button.pack(side="left")
+        self.root.bind(
+            "<Button-1>",
+            self._dismiss_settings_popup_on_root_click,
+            add="+",
+        )
+
         outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill="both", expand=True)
 
@@ -716,60 +1006,53 @@ class CommanderGUI:
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(0, 12))
-        for column in range(5):
+        for column in range(4):
             buttons.columnconfigure(column, weight=1, uniform="main_actions")
         self.start_button = ttk.Button(
             buttons,
-            text="开启对局",
+            text=self._t("start_game"),
             command=self._start_project,
             style="Action.TButton",
         )
         self.start_button.grid(row=0, column=0, sticky="ew")
         self.stop_button = ttk.Button(
             buttons,
-            text="强制停止",
+            text=self._t("force_stop"),
             command=self._stop_project,
             style="Danger.TButton",
             state="disabled",
         )
         self.stop_button.grid(row=0, column=1, sticky="ew", padx=(10, 0))
-        self.api_key_button = ttk.Button(
-            buttons,
-            text="配置 API Key",
-            command=self._open_api_key_dialog,
-            style="Action.TButton",
-        )
-        self.api_key_button.grid(row=0, column=2, sticky="ew", padx=(10, 0))
         self.map_button = ttk.Button(
             buttons,
-            text="地图点位",
+            text=self._t("map_points"),
             command=self._open_map_editor,
             style="Action.TButton",
         )
-        self.map_button.grid(row=0, column=3, sticky="ew", padx=(10, 0))
+        self.map_button.grid(row=0, column=2, sticky="ew", padx=(10, 0))
         self.plan_button = ttk.Button(
             buttons,
-            text="战术指令集",
+            text=self._t("command_plans"),
             command=self._open_command_plan_editor,
             style="Action.TButton",
         )
-        self.plan_button.grid(row=0, column=4, sticky="ew", padx=(10, 0))
+        self.plan_button.grid(row=0, column=3, sticky="ew", padx=(10, 0))
 
-        jobs_frame = ttk.LabelFrame(outer, text=" 指令运行状态 ", padding=(8, 6))
-        jobs_frame.pack(fill="x", pady=(0, 12))
-        jobs_frame.columnconfigure(0, weight=1)
+        self.jobs_frame = ttk.LabelFrame(outer, text=self._t("jobs_title"), padding=(8, 6))
+        self.jobs_frame.pack(fill="x", pady=(0, 12))
+        self.jobs_frame.columnconfigure(0, weight=1)
         self.job_tree = ttk.Treeview(
-            jobs_frame,
+            self.jobs_frame,
             columns=("id", "status", "selection", "progress", "instruction"),
             show="headings",
             height=5,
             selectmode="browse",
         )
-        self.job_tree.heading("id", text="编号")
-        self.job_tree.heading("status", text="状态")
-        self.job_tree.heading("selection", text="提交时单位 ID")
-        self.job_tree.heading("progress", text="进度 / 反馈")
-        self.job_tree.heading("instruction", text="玩家指令")
+        self.job_tree.heading("id", text=self._t("job_id"))
+        self.job_tree.heading("status", text=self._t("job_status"))
+        self.job_tree.heading("selection", text=self._t("job_selection"))
+        self.job_tree.heading("progress", text=self._t("job_progress"))
+        self.job_tree.heading("instruction", text=self._t("job_instruction"))
         self.job_tree.column("id", width=92, minwidth=82, stretch=False, anchor="center")
         self.job_tree.column("status", width=90, minwidth=78, stretch=False, anchor="center")
         self.job_tree.column("selection", width=205, minwidth=120, stretch=True)
@@ -779,12 +1062,22 @@ class CommanderGUI:
         self.job_tree.tag_configure("running", foreground="#8a5a00")
         self.job_tree.tag_configure("completed", foreground="#26734d")
         self.job_tree.tag_configure("failed", foreground="#b42318")
-        job_scroll = ttk.Scrollbar(jobs_frame, orient="vertical", command=self.job_tree.yview)
+        job_scroll = ttk.Scrollbar(self.jobs_frame, orient="vertical", command=self.job_tree.yview)
         job_scroll.grid(row=0, column=1, sticky="ns")
         self.job_tree.configure(yscrollcommand=job_scroll.set)
-        self.job_tree.insert("", "end", iid="placeholder", values=("—", "空闲", "尚无指令", ""))
+        self.job_tree.insert(
+            "",
+            "end",
+            iid="placeholder",
+            values=("—", self._t("idle"), self._t("not_selected"), self._t("no_instruction"), ""),
+        )
 
-        ttk.Label(outer, text="消息", font=("Microsoft YaHei UI", 10, "bold")).pack(
+        self.messages_label = ttk.Label(
+            outer,
+            text=self._t("messages"),
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        self.messages_label.pack(
             anchor="w", pady=(0, 5)
         )
         self.messages = ScrolledText(
@@ -806,12 +1099,12 @@ class CommanderGUI:
         self.messages.tag_configure("system_label", foreground="#9aa8b5", font=("Microsoft YaHei UI", 10, "bold"))
         self.messages.tag_configure("body", foreground="#e6edf3", spacing3=8)
 
-        ttk.Label(
+        self.command_label = ttk.Label(
             outer,
-            text="自然语言指令（Ctrl+Enter 发送）",
+            text=self._t("command_input"),
             font=("Microsoft YaHei UI", 10, "bold"),
-        ).pack(anchor="w", pady=(12, 5))
-        command_label = outer.pack_slaves()[-1]
+        )
+        self.command_label.pack(anchor="w", pady=(12, 5))
         self.input_row = ttk.Frame(outer)
         self.input_row.pack(fill="x")
         self.input_row.columnconfigure(0, weight=1)
@@ -833,35 +1126,35 @@ class CommanderGUI:
         self.input_actions.grid(row=0, column=1, sticky="ns", padx=(10, 0))
         self.record_button = ttk.Button(
             self.input_actions,
-            text="开始录音",
+            text=self._t("start_recording"),
             command=self._toggle_recording,
             style="Action.TButton",
         )
         self.record_button.pack(side="left", fill="both", expand=True)
         self.listen_button = ttk.Button(
             self.input_actions,
-            text="开始监听",
+            text=self._t("start_listening"),
             command=self._toggle_listening,
             style="Action.TButton",
         )
         self.listen_button.pack(side="left", fill="both", expand=True, padx=(8, 0))
         self.send_button = ttk.Button(
             self.input_actions,
-            text="发送指令",
+            text=self._t("send_command"),
             command=self._send,
             style="Action.TButton",
             state="disabled",
         )
         self.send_button.pack(side="left", fill="both", expand=True, padx=(8, 0))
         self.input_row.pack_configure(side="bottom", before=self.messages)
-        command_label.pack_configure(side="bottom", before=self.messages)
+        self.command_label.pack_configure(side="bottom", before=self.messages)
 
     def _open_api_key_dialog(self) -> None:
         key_path = self.project_root / "config" / "openai.env"
         configured_key = os.getenv("OPENAI_API_KEY") or read_openai_api_key(key_path)
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("配置 OpenAI API Key")
+        dialog.title(self._t("api_title"))
         dialog.geometry("530x245")
         dialog.resizable(True, True)
         dialog.transient(self.root)
@@ -871,13 +1164,13 @@ class CommanderGUI:
         content.pack(fill="both", expand=True)
         ttk.Label(
             content,
-            text="OpenAI API Key",
+            text=self._t("api_heading"),
             font=("Microsoft YaHei UI", 13, "bold"),
         ).pack(anchor="w")
         current_text = (
-            f"当前配置：{mask_api_key(configured_key)}"
+            self._t("api_current", key=mask_api_key(configured_key))
             if configured_key
-            else "当前尚未配置 API Key"
+            else self._t("api_missing")
         )
         ttk.Label(content, text=current_text).pack(anchor="w", pady=(5, 12))
 
@@ -892,14 +1185,14 @@ class CommanderGUI:
 
         ttk.Checkbutton(
             content,
-            text="显示输入内容",
+            text=self._t("api_show"),
             variable=show_key,
             command=toggle_visibility,
         ).pack(anchor="w", pady=(7, 0))
 
         ttk.Label(
             content,
-            text="密钥保存在 config\\openai.env；完整内容不会显示在消息或日志中。",
+            text=self._t("api_storage"),
             foreground="#59636e",
         ).pack(anchor="w", pady=(7, 0))
 
@@ -907,7 +1200,7 @@ class CommanderGUI:
         actions.pack(fill="x", side="bottom", pady=(14, 0))
         ttk.Button(
             actions,
-            text="保存",
+            text=self._t("save"),
             style="Action.TButton",
             command=lambda: self._save_api_key(dialog, key_value.get()),
         ).pack(side="right")
@@ -922,7 +1215,7 @@ class CommanderGUI:
         try:
             saved_key = save_openai_api_key(key_path, key)
         except (OSError, ValueError) as error:
-            messagebox.showerror("保存失败", str(error), parent=dialog)
+            messagebox.showerror(self._t("save_failed"), str(error), parent=dialog)
             return
 
         os.environ["OPENAI_API_KEY"] = saved_key
@@ -931,19 +1224,125 @@ class CommanderGUI:
             self.launch_process is not None and self.launch_process.poll() is None
         )
         effect = (
-            "当前项目已经运行，请停止后重新启动以使用新配置。"
+            self._t("api_effect_restart")
             if project_running
-            else "下次点击“”时生效。"
+            else self._t("api_effect_next")
         )
         dialog.destroy()
         self._append_message(
             "system",
-            "OpenAI API Key 已配置成功。\n"
-            f"配置：OPENAI_API_KEY={masked}\n"
-            f"保存位置：{key_path}\n"
-            f"{effect}\n"
-            "LLM 提供方仍由 config\\llm.env 中的 LLM_PROVIDER 决定。",
+            self._t(
+                "api_saved_message",
+                key=masked,
+                path=key_path,
+                effect=effect,
+            ),
         )
+
+    def _about_github_url(self) -> str:
+        path = self.project_root / "config" / "about.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        url = str(payload.get("github_url", "")).strip()
+        return url if url.casefold().startswith(("https://github.com/", "http://github.com/")) else ""
+
+    def _open_about_dialog(self) -> None:
+        if self.about_window is not None and self.about_window.winfo_exists():
+            self.about_window.lift()
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self._t("about_title"))
+        dialog.geometry("680x600")
+        dialog.minsize(560, 500)
+        dialog.transient(self.root)
+        self.about_window = dialog
+
+        content = ttk.Frame(dialog, padding=20)
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content,
+            text="StarCraft II AI Commander",
+            style="Title.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            content,
+            text=self._t("about_intro"),
+            wraplength=630,
+            justify="left",
+        ).pack(anchor="w", fill="x", pady=(8, 14))
+
+        github_url = self._about_github_url()
+        github_row = ttk.Frame(content)
+        github_row.pack(fill="x", pady=(0, 14))
+        ttk.Label(
+            github_row,
+            text=f"{self._t('github')}：",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(side="left")
+        github_label = tk.Label(
+            github_row,
+            text=github_url or self._t("github_unconfigured"),
+            foreground="#0969da" if github_url else "#59636e",
+            cursor="hand2" if github_url else "arrow",
+            anchor="w",
+        )
+        github_label.pack(side="left", fill="x", expand=True)
+        if github_url:
+            github_label.bind("<Button-1>", lambda _event: webbrowser.open(github_url))
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=(0, 14))
+        ttk.Label(
+            content,
+            text=self._t("donation"),
+            font=("Microsoft YaHei UI", 12, "bold"),
+        ).pack(anchor="center", pady=(0, 10))
+
+        qr_row = ttk.Frame(content)
+        qr_row.pack(fill="both", expand=True)
+        qr_row.columnconfigure(0, weight=1)
+        qr_row.columnconfigure(1, weight=1)
+        photos: list[ImageTk.PhotoImage] = []
+        for column, (label_key, filename) in enumerate(
+            (("alipay", "alipay.jpg"), ("wechat", "wechat.jpg"))
+        ):
+            panel = ttk.Frame(qr_row, padding=(8, 0))
+            panel.grid(row=0, column=column, sticky="nsew")
+            ttk.Label(
+                panel,
+                text=self._t(label_key),
+                font=("Microsoft YaHei UI", 10, "bold"),
+            ).pack(pady=(0, 7))
+            image_path = bundled_asset_path(
+                self.project_root,
+                "assets",
+                "about",
+                filename,
+            )
+            try:
+                with Image.open(image_path) as opened:
+                    opened.load()
+                    source = ImageOps.exif_transpose(opened).convert("RGB")
+                source.thumbnail((250, 280), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(source, master=dialog)
+            except (OSError, ValueError):
+                ttk.Label(panel, text=self._t("image_unavailable")).pack(expand=True)
+            else:
+                photos.append(photo)
+                ttk.Label(panel, image=photo).pack(expand=True)
+        setattr(dialog, "_about_photos", photos)
+
+        def closed() -> None:
+            self.about_window = None
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", closed)
+        dialog.bind("<Escape>", lambda _event: closed())
+        self._enable_responsive_scaling(dialog, 680, 600, minimum=0.72)
 
     def _post_ui(self, callback: object, *args: object) -> None:
         """Queue a main-thread UI callback without calling Tk from worker threads."""
@@ -2690,11 +3089,28 @@ class CommanderGUI:
                 f"请先运行 scripts\\setup-voice.ps1，然后重新点击{retry_action}。",
             )
             return None
+        voice_language = "en" if getattr(self, "language", "zh_CN") == "en" else "zh"
+        if (
+            self.voice_transcriber is not None
+            and getattr(self.voice_transcriber, "language", voice_language) != voice_language
+        ):
+            close = getattr(self.voice_transcriber, "close", None)
+            if callable(close):
+                close()
+            self.voice_transcriber = None
         if self.voice_transcriber is None:
             self.voice_transcriber = (
-                LocalWhisperTranscriber(self.project_root, self.whisper_model)
+                LocalWhisperTranscriber(
+                    self.project_root,
+                    self.whisper_model,
+                    language=voice_language,
+                )
                 if self.voice_provider == "local"
-                else OpenAITranscriber(model=TRANSCRIPTION_MODEL, api_key=api_key)
+                else OpenAITranscriber(
+                    model=TRANSCRIPTION_MODEL,
+                    api_key=api_key,
+                    language=voice_language,
+                )
             )
         self.voice_api_key = api_key
         return self.voice_transcriber
@@ -2729,7 +3145,7 @@ class CommanderGUI:
         self.recording_transcribing = False
         self.record_button.configure(
             state="normal",
-            text="停止录音",
+            text=self._t("stop_recording"),
             style="Recording.TButton",
         )
         self.listen_button.configure(state="disabled")
@@ -2757,7 +3173,7 @@ class CommanderGUI:
         self.recording_transcribing = True
         self.record_button.configure(
             state="disabled",
-            text="正在转写…",
+            text=self._t("transcribing"),
             style="Action.TButton",
         )
         self.listen_button.configure(state="disabled")
@@ -2792,7 +3208,7 @@ class CommanderGUI:
             return
         self.record_button.configure(
             state="normal",
-            text="开始录音",
+            text=self._t("start_recording"),
             style="Action.TButton",
         )
         if not self.listening_running and self.voice_transcription_thread is None:
@@ -2869,7 +3285,7 @@ class CommanderGUI:
         self.voice_sentence_count = 0
         self.listen_button.configure(
             state="normal",
-            text="停止监听",
+            text=self._t("stop_listening"),
             style="Recording.TButton",
         )
         self.record_button.configure(state="disabled")
@@ -2908,7 +3324,7 @@ class CommanderGUI:
         self.voice_listener = None
         self.listen_button.configure(
             state="disabled",
-            text="正在完成最后一句…",
+            text=self._t("finishing_last"),
             style="Action.TButton",
         )
         self.record_button.configure(state="disabled")
@@ -3011,7 +3427,7 @@ class CommanderGUI:
             return
         self.listen_button.configure(
             state="normal",
-            text="开始监听",
+            text=self._t("start_listening"),
             style="Action.TButton",
         )
         if not self.recording_running and not self.recording_transcribing:
@@ -3054,6 +3470,13 @@ class CommanderGUI:
     ) -> None:
         self.poll_running = False
         if self.closing:
+            return
+        if self.menu_active:
+            # Native Tk menus run their own event loop on Windows. Reconfiguring
+            # the main widget tree from a status poll while a menu is posted can
+            # make that menu flash and miss mouse clicks. Preserve only the
+            # newest result and apply it immediately after the menu closes.
+            self._deferred_poll_result = (health, events, state, jobs, error)
             return
         if error is not None or health is None:
             self.server_ready = False
@@ -3149,7 +3572,14 @@ class CommanderGUI:
             self._append_message(role, text)
         self.root.after(500, self._poll)
 
-    def _received_jobs(self, jobs: list[dict[str, object]]) -> None:
+    def _received_jobs(
+        self,
+        jobs: list[dict[str, object]],
+        *,
+        force: bool = False,
+    ) -> None:
+        if not force and jobs == self.jobs:
+            return
         self.jobs = jobs
         for item_id in self.job_tree.get_children():
             self.job_tree.delete(item_id)
@@ -3158,19 +3588,28 @@ class CommanderGUI:
                 "",
                 "end",
                 iid="placeholder",
-                values=("—", "空闲", "未选择", "尚无指令", ""),
+                values=(
+                    "—",
+                    self._t("idle"),
+                    self._t("not_selected"),
+                    self._t("no_instruction"),
+                    "",
+                ),
             )
             return
         labels = {
-            "queued": "排队中",
-            "transcribing": "语音转写",
-            "planning": "指令解析",
-            "plan_ready": "计划就绪",
-            "validating": "规则预检",
-            "executing": "正在执行",
-            "waiting": "持续运行",
-            "completed": "已完成",
-            "failed": "已终止",
+            phase: self._t(f"phase_{phase}")
+            for phase in (
+                "queued",
+                "transcribing",
+                "planning",
+                "plan_ready",
+                "validating",
+                "executing",
+                "waiting",
+                "completed",
+                "failed",
+            )
         }
         for index, job in enumerate(jobs):
             job_id = str(job.get("id", ""))
@@ -3184,11 +3623,14 @@ class CommanderGUI:
             else:
                 selection_tags = []
             if not selection_tags:
-                selection_text = "未选择"
+                selection_text = self._t("not_selected")
             elif len(selection_tags) <= 8:
                 selection_text = ", ".join(selection_tags)
             else:
-                selection_text = ", ".join(selection_tags[:8]) + f" …（共 {len(selection_tags)} 个）"
+                selection_text = ", ".join(selection_tags[:8]) + self._t(
+                    "selection_total",
+                    count=len(selection_tags),
+                )
             if total > 0:
                 message = f"{current}/{total} · {message}"
             self.job_tree.insert(
@@ -3238,11 +3680,11 @@ class CommanderGUI:
 
     def _append_message(self, role: str, text: str) -> None:
         labels = {
-            "player": ("玩家", "player_label"),
-            "assistant": ("AI", "assistant_label"),
-            "system": ("系统", "system_label"),
+            "player": (self._t("player"), "player_label"),
+            "assistant": (self._t("assistant"), "assistant_label"),
+            "system": (self._t("system"), "system_label"),
         }
-        label, tag = labels.get(role, ("系统", "system_label"))
+        label, tag = labels.get(role, (self._t("system"), "system_label"))
         timestamp = time.strftime("%H:%M:%S")
         self.messages.configure(state="normal")
         self.messages.insert("end", f"[{timestamp}] {label}\n", tag)
@@ -3252,6 +3694,7 @@ class CommanderGUI:
 
     def _close(self) -> None:
         self.closing = True
+        self._close_settings_popup()
         self._clear_map_background()
         listener = self.voice_listener
         self.voice_listener = None

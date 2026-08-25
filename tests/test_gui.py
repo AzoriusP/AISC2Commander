@@ -11,6 +11,7 @@ from tkinter import ttk
 import pytest
 
 from aisc2commander.gui import (
+    bundled_asset_path,
     CommanderGUI,
     ComputerPlayerChoice,
     GameConnectionChoice,
@@ -21,10 +22,145 @@ from aisc2commander.gui import (
     _terminate_named_process,
     find_project_root,
 )
+from aisc2commander.gui_i18n import load_gui_language, save_gui_language, translate
+
+
+@pytest.fixture(scope="module")
+def tk_host() -> tk.Tk:
+    """Keep one Tcl interpreter alive across Windows GUI layout tests."""
+
+    root = tk.Tk()
+    root.withdraw()
+    yield root
+    root.destroy()
 
 
 def test_gui_finds_project_root() -> None:
     assert (find_project_root() / "scripts" / "run.ps1").is_file()
+
+
+def test_gui_language_is_persisted_and_invalid_values_fall_back(tmp_path) -> None:
+    path = tmp_path / "config" / "gui_settings.json"
+
+    assert load_gui_language(path) == "zh_CN"
+    assert save_gui_language(path, "zh_TW") == "zh_TW"
+    assert load_gui_language(path) == "zh_TW"
+    assert translate("zh_TW", "settings") == "設定"
+    assert translate("en", "configure_api_key") == "Configure API Key"
+    assert save_gui_language(path, "invalid") == "zh_CN"
+
+
+def test_voice_language_follows_gui_language_without_auto_detection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    created: list[object] = []
+
+    class FakeTranscriber:
+        def __init__(self, *, model: str, api_key: str, language: str) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.language = language
+            self.closed = False
+            created.append(self)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("aisc2commander.gui.OpenAITranscriber", FakeTranscriber)
+    gui = CommanderGUI.__new__(CommanderGUI)
+    gui.project_root = tmp_path
+    gui.voice_provider = "openai"
+    gui.voice_transcriber = None
+    gui.voice_api_key = ""
+    gui.whisper_model = "small"
+
+    gui.language = "en"
+    english = gui._prepare_voice_transcriber("recording")
+    assert english is not None
+    assert english.language == "en"
+
+    gui.language = "zh_TW"
+    chinese = gui._prepare_voice_transcriber("recording")
+    assert chinese is not None
+    assert chinese.language == "zh"
+    assert english.closed
+    assert len(created) == 2
+
+
+def test_bundled_asset_path_prefers_pyinstaller_resource(monkeypatch, tmp_path) -> None:
+    project_root = tmp_path / "project"
+    bundle_root = tmp_path / "bundle"
+    bundled = bundle_root / "assets" / "about" / "alipay.jpg"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"image")
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_root), raising=False)
+
+    assert bundled_asset_path(project_root, "assets", "about", "alipay.jpg") == bundled
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk menu validation")
+def test_language_submenu_refreshes_main_window_and_persists(
+    monkeypatch,
+    tmp_path,
+    tk_host,
+) -> None:
+    monkeypatch.setattr("aisc2commander.gui.find_project_root", lambda: tmp_path)
+    root = tk.Toplevel(tk_host)
+    root.attributes("-alpha", 0.0)
+    gui = CommanderGUI(root)
+    try:
+        gui._open_settings_popup()
+        gui._show_language_panel()
+        root.update()
+        gui.language_option_buttons["en"].invoke()
+        root.update()
+
+        assert gui.language == "en"
+        assert gui.start_button.cget("text") == "Start Game"
+        assert gui.stop_button.cget("text") == "Force Stop"
+        assert gui.settings_button.cget("text") == "Settings"
+        assert not root.cget("menu")
+        assert gui.settings_popup is None
+        assert load_gui_language(tmp_path / "config" / "gui_settings.json") == "en"
+    finally:
+        gui.closing = True
+        root.destroy()
+
+
+def test_settings_menu_suspends_and_replays_periodic_ui_updates() -> None:
+    replayed: list[tuple[object, ...]] = []
+    gui = CommanderGUI.__new__(CommanderGUI)
+    gui.poll_running = True
+    gui.closing = False
+    gui.menu_active = True
+    gui._deferred_poll_result = None
+    gui.root = SimpleNamespace(after_idle=lambda callback: callback())
+
+    error = RuntimeError("offline")
+    gui._poll_finished(None, [], None, [], error)
+
+    assert not gui.poll_running
+    assert gui._deferred_poll_result == (None, [], None, [], error)
+
+    gui._poll_finished = lambda *result: replayed.append(result)
+    gui._menu_closed()
+
+    assert not gui.menu_active
+    assert replayed == [(None, [], None, [], error)]
+
+
+def test_unchanged_job_payload_does_not_rebuild_tree() -> None:
+    gui = CommanderGUI.__new__(CommanderGUI)
+    gui.jobs = [{"id": "job-1", "phase": "queued"}]
+
+    class TreeThatMustNotBeTouched:
+        def get_children(self):
+            raise AssertionError("unchanged jobs should not touch the tree")
+
+    gui.job_tree = TreeThatMustNotBeTouched()
+    gui._received_jobs([{"id": "job-1", "phase": "queued"}])
 
 
 def test_game_map_choice_requires_explicit_valid_source(tmp_path) -> None:
@@ -89,8 +225,8 @@ def test_map_viewport_preserves_world_coordinate_aspect_ratio() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Tk window layout validation")
-def test_responsive_windows_keep_main_actions_and_map_footer_visible() -> None:
-    root = tk.Tk()
+def test_responsive_windows_keep_main_actions_and_map_footer_visible(tk_host) -> None:
+    root = tk.Toplevel(tk_host)
     root.attributes("-alpha", 0.0)
     gui = CommanderGUI(root)
     try:
@@ -105,7 +241,6 @@ def test_responsive_windows_keep_main_actions_and_map_footer_visible() -> None:
             for widget in (
                 gui.start_button,
                 gui.stop_button,
-                gui.api_key_button,
                 gui.map_button,
                 gui.plan_button,
             )
@@ -116,7 +251,6 @@ def test_responsive_windows_keep_main_actions_and_map_footer_visible() -> None:
             for widget in (
                 gui.start_button,
                 gui.stop_button,
-                gui.api_key_button,
                 gui.map_button,
                 gui.plan_button,
             )

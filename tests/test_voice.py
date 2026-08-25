@@ -218,3 +218,32 @@ def test_openai_transcriber_uses_llm_audio_transcription() -> None:
     assert captured["model"] == "gpt-transcribe"
     assert captured["language"] == "zh"
     assert "星际争霸2" in str(captured["prompt"])
+    assert "English tactical commands" not in str(captured["prompt"])
+
+
+def test_openai_transcriber_uses_fixed_english_without_language_detection(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeTranscriptions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="Move the selected Marines to A1")
+
+    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=FakeTranscriptions()))
+    transcriber = OpenAITranscriber(
+        model="gpt-transcribe",
+        client=client,
+        language="en",
+    )
+    path = tmp_path / "command.wav"
+    path.write_bytes(b"RIFF-test")
+
+    assert transcriber.transcribe(path) == "Move the selected Marines to A1"
+    assert captured["language"] == "en"
+    assert "English tactical commands" in str(captured["prompt"])
+    assert "中文战术指令" not in str(captured["prompt"])
+
+
+def test_transcriber_rejects_automatic_language_detection() -> None:
+    with pytest.raises(ValueError, match="zh or en"):
+        OpenAITranscriber(client=SimpleNamespace(), language="auto")

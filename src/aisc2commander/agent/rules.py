@@ -22,7 +22,7 @@ UNIT_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("女妖", "banshee"), "Banshee"),
     (("渡鸦", "raven"), "Raven"),
     (("战列巡航舰", "战巡", "大和", "battlecruiser"), "Battlecruiser"),
-    (("scv", "农民", "工人"), "SCV"),
+    (("scv", "worker", "workers", "农民", "工人"), "SCV"),
     # Protoss.
     (("探机", "probe"), "Probe"),
     (("狂热者", "叉叉", "zealot"), "Zealot"),
@@ -149,10 +149,10 @@ GENERIC_ABILITY_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 UPGRADE_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("步兵武器", "步兵攻击", "枪兵攻击", "陆战队攻击"), "TerranInfantryWeapons"),
-    (("步兵护甲", "步兵防御", "枪兵防御"), "TerranInfantryArmors"),
-    (("兴奋剂", "兴奋剂科技"), "Stimpack"),
-    (("战斗盾牌", "盾牌"), "CombatShield"),
+    (("infantry weapons", "步兵武器", "步兵攻击", "枪兵攻击", "陆战队攻击"), "TerranInfantryWeapons"),
+    (("infantry armor", "infantry armour", "步兵护甲", "步兵防御", "枪兵防御"), "TerranInfantryArmors"),
+    (("stimpack", "stim pack", "兴奋剂", "兴奋剂科技"), "Stimpack"),
+    (("combat shield", "战斗盾牌", "盾牌"), "CombatShield"),
     (("震撼弹", "震荡弹"), "ConcussiveShells"),
     (("车辆武器", "机械武器"), "TerranVehicleWeapons"),
     (("舰船武器", "空军武器"), "TerranShipWeapons"),
@@ -172,9 +172,9 @@ UPGRADE_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("星灵护盾", "神族护盾"), "ProtossShields"),
     (("星灵空军武器", "星灵空攻", "神族空攻"), "ProtossAirWeapons"),
     (("星灵空军护甲", "星灵空防", "神族空防"), "ProtossAirArmors"),
-    (("折跃门科技", "折跃门研究"), "WarpGateResearch"),
-    (("冲锋", "狂热者冲锋"), "Charge"),
-    (("闪现科技", "追猎者闪现"), "BlinkTech"),
+    (("warpgate research", "warp gate research", "折跃门科技", "折跃门研究"), "WarpGateResearch"),
+    (("charge", "冲锋", "狂热者冲锋"), "Charge"),
+    (("blink", "blink tech", "闪现科技", "追猎者闪现"), "BlinkTech"),
     (("使徒攻击", "共振旋转刀"), "AdeptPiercingAttack"),
     (("灵能风暴科技", "闪电科技"), "PsiStormTech"),
     (("巨像射程", "热能长枪"), "ExtendedThermalLance"),
@@ -209,9 +209,9 @@ BUILDING_MORPH_SYNONYMS: tuple[tuple[tuple[str, ...], str, str], ...] = (
 )
 
 BUILDING_OPERATION_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("集结点", "集合点", "集结到", "集合到"), "set_rally"),
-    (("起飞", "升空"), "lift"),
-    (("降落", "落地"), "land"),
+    (("rally point", "set rally", "集结点", "集合点", "集结到", "集合到"), "set_rally"),
+    (("lift off", "lift", "起飞", "升空"), "lift"),
+    (("land", "降落", "落地"), "land"),
     (("降下补给", "放下补给", "收起补给", "补给站下降"), "lower_supply"),
     (("升起补给", "竖起补给", "补给站上升"), "raise_supply"),
     (("轨道指挥部", "轨道基地"), "morph_orbital"),
@@ -221,12 +221,12 @@ BUILDING_OPERATION_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 UNIT_ABILITY_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("停止", "停下", "取消命令"), "stop"),
-    (("坚守原地", "保持位置", "原地防守"), "hold_position"),
-    (("巡逻",), "patrol"),
+    (("stop", "停止", "停下", "取消命令"), "stop"),
+    (("hold position", "坚守原地", "保持位置", "原地防守"), "hold_position"),
+    (("patrol", "巡逻"), "patrol"),
     (("解除攻城", "退出攻城", "收起坦克"), "unsiege"),
-    (("攻城模式", "架起坦克", "架起来"), "siege"),
-    (("使用兴奋剂", "打兴奋剂", "开兴奋剂"), "stim"),
+    (("siege mode", "siege", "攻城模式", "架起坦克", "架起来"), "siege"),
+    (("use stim", "stim", "使用兴奋剂", "打兴奋剂", "开兴奋剂"), "stim"),
     (("取消隐形", "解除隐形", "关闭隐形"), "decloak"),
     (("开启隐形", "进入隐形"), "cloak"),
     (("解除钻地", "取消钻地", "钻出来"), "unburrow"),
@@ -240,13 +240,57 @@ UNIT_ABILITY_SYNONYMS: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 
+def _normalize_player_text(text: str) -> str:
+    """Normalize common English command grammar into the existing rule vocabulary.
+
+    Unit, structure, upgrade, and map-point names stay in their original language.
+    This is deliberately deterministic language normalization, not language detection;
+    fuzzy commands outside this fast path are still delegated to the configured LLM.
+    """
+
+    normalized = re.sub(r"\s+", " ", text.strip().casefold())
+    replacements = (
+        (r"\b(?:show|list|display)\s+(?:the\s+)?(?:scheduled\s+)?tasks?\b", "查看任务"),
+        (r"\bpause\s+(?:the\s+)?(?:scheduled\s+)?tasks?\b", "暂停任务"),
+        (r"\b(?:resume|continue)\s+(?:the\s+)?(?:scheduled\s+)?tasks?\b", "恢复任务"),
+        (r"\b(?:cancel|stop)\s+(?:the\s+)?(?:scheduled\s+)?tasks?\b", "取消任务"),
+        (r"\bnearest\s+(?:vespene\s+)?geyser\b", "最近气矿"),
+        (r"\b(?:second\s+base|natural\s+expansion)\b", "二矿"),
+        (r"\b(?:the\s+)?(?:currently\s+)?selected\b", "选中"),
+        (r"\b(?:these|those)\b", "这些"),
+        (r"\bcurrent\b", "当前"),
+        (r"\b(?:all|every)\b", "所有"),
+        (r"\b(?:random|randomly)\b", "随机"),
+        (r"\b(?:queue\s+up|produce|train)\b", "生产"),
+        (r"\b(?:construct|build|place)\b", "建造"),
+        (r"\b(?:research|develop)\b", "研究"),
+        (r"\bupgrade\b", "升级"),
+        (r"\b(?:focus\s+fire|engage|attack)\b", "攻击"),
+        (r"\bmove\b", "移动"),
+        (r"\b(?:head|go)\b", "去"),
+        (r"\bthen\b", "然后"),
+        (r"\b(?:nearby|near|around)\b", "附近"),
+        (r"\b(?:enemy|enemies|opponent|opponents)\b", "敌人"),
+        (r"\bright\b", "右"),
+        (r"\bleft\b", "左"),
+        (r"\bup\b", "上"),
+        (r"\bdown\b", "下"),
+    )
+    for pattern, replacement in replacements:
+        normalized = re.sub(pattern, replacement, normalized)
+    # English prepositions are useful only as lightweight command glue here.
+    normalized = re.sub(r"\bto\b", "到", normalized)
+    normalized = re.sub(r"\bat\b", "在", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 class RulePlanner:
-    """Small deterministic Chinese fallback; it emits the same bounded tool calls as the LLM."""
+    """Small deterministic bilingual fallback using the same bounded tools as the LLM."""
 
     model = "zh-rules-v1"
 
     def plan(self, text: str, state: AgentGameState) -> AgentPlan:
-        normalized = text.strip().casefold()
+        normalized = _normalize_player_text(text)
         if not normalized:
             return self._clarify(text, "没有听到指令，请再说一次。")
         parallel = _parallel_parts(normalized)
@@ -365,7 +409,7 @@ class RulePlanner:
                 "point_name": point_name,
                 "dx": dx,
                 "dy": dy,
-                "queue": "然后" in text or "排队" in text,
+                "queue": _queue_requested(text),
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析移动指令。")
@@ -388,7 +432,7 @@ class RulePlanner:
                 "point_name": point_name,
                 "target_unit_tag": None,
                 "target_unit_type": None,
-                "queue": "然后" in text or "排队" in text,
+                "queue": _queue_requested(text),
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析攻击指令。")
@@ -438,7 +482,7 @@ class RulePlanner:
                 "target_x": coordinate[0] if coordinate else None,
                 "target_y": coordinate[1] if coordinate else None,
                 "point_name": point_name,
-                "queue": "然后" in text or "排队" in text,
+                "queue": _queue_requested(text),
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析建造指令。")
@@ -482,7 +526,7 @@ class RulePlanner:
             "point_name": point_name,
             "target_unit_tag": None,
             "target_unit_type": None,
-            "queue": "然后" in text or "排队" in text,
+            "queue": _queue_requested(text),
             "include_structures": source_structure is not None or any(
                 word in text for word in ("建筑", "基地", "轨道", "母舰核心")
             ),
@@ -596,7 +640,7 @@ class RulePlanner:
                 "target_x": coordinate[0] if coordinate else None,
                 "target_y": coordinate[1] if coordinate else None,
                 "point_name": point_name,
-                "queue": "然后" in text or "排队" in text,
+                "queue": _queue_requested(text),
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析单位能力指令。")
@@ -627,7 +671,7 @@ class RulePlanner:
                 "target_x": coordinate[0] if coordinate else None,
                 "target_y": coordinate[1] if coordinate else None,
                 "point_name": point_name,
-                "queue": "然后" in text or "排队" in text,
+                "queue": _queue_requested(text),
             },
         )
         return AgentPlan(original, "rules", self.model, (call,), "已解析建筑操作。")
@@ -638,7 +682,7 @@ class RulePlanner:
 
 def _unit_type(text: str) -> str | None:
     for synonyms, canonical in UNIT_SYNONYMS:
-        if any(name in text for name in synonyms):
+        if any(_contains_synonym(text, name) for name in synonyms):
             return canonical
     return None
 
@@ -648,7 +692,7 @@ def _race_aware_unit_type(text: str, state: AgentGameState) -> str | None:
     if (
         unit_type == "SCV"
         and "scv" not in text
-        and any(word in text for word in ("农民", "工人"))
+        and any(word in text for word in ("worker", "workers", "农民", "工人"))
         and state.player_race in {"protoss", "zerg"}
     ):
         return "Probe" if state.player_race == "protoss" else "Drone"
@@ -657,13 +701,27 @@ def _race_aware_unit_type(text: str, state: AgentGameState) -> str | None:
 
 def _structure_type(text: str) -> str | None:
     for synonyms, canonical in STRUCTURE_SYNONYMS:
-        if any(name in text for name in synonyms):
+        if any(_contains_synonym(text, name) for name in synonyms):
             return canonical
     return None
 
 
+def _contains_synonym(text: str, name: str) -> bool:
+    if name in text:
+        return True
+    if not name.isascii():
+        return False
+    compact_text = re.sub(r"[\s_-]+", "", text)
+    compact_name = re.sub(r"[\s_-]+", "", name)
+    return compact_name in compact_text
+
+
+def _queue_requested(text: str) -> bool:
+    return any(word in text for word in ("然后", "排队", "queued", "queue"))
+
+
 def _is_expansion_request(text: str) -> bool:
-    return any(word in text for word in ("二矿", "分矿", "开矿", "扩张"))
+    return any(word in text for word in ("二矿", "分矿", "开矿", "扩张", "expand", "expansion"))
 
 
 def _expansion_structure(text: str, state: AgentGameState) -> str | None:
@@ -733,6 +791,7 @@ def _coordinate(text: str) -> tuple[float, float] | None:
         r"[（(]\s*(-?\d+(?:\.\d+)?)\s*[,，、 ]\s*(-?\d+(?:\.\d+)?)\s*[)）]",
         r"(?:坐标|位置|移动到|走到|攻击到|打到|建造在|建在|盖在)\s*[:：]?\s*(-?\d+(?:\.\d+)?)\s*[,，、 ]\s*(-?\d+(?:\.\d+)?)",
         r"(?:巡逻到|部署到|架设到|降落到|集结到|集合到)\s*[:：]?\s*(-?\d+(?:\.\d+)?)\s*[,，、 ]\s*(-?\d+(?:\.\d+)?)",
+        r"(?:coordinates?|position)\s*[:=]?\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
@@ -751,6 +810,13 @@ def _map_point(text: str, state: AgentGameState | None) -> str | None:
 
 
 def _control_group(text: str) -> int | None:
+    english_numbers = "one|two|three|four|five|six|seven|eight|nine|ten"
+    match = re.search(
+        rf"(?:control\s*group|group|squad)\s*(10|[1-9]|{english_numbers})\b",
+        text,
+    )
+    if match:
+        return _small_number(match.group(1))
     match = re.search(r"(?:编组|第)?\s*(10|[1-9])\s*(?:队|组)", text)
     if match:
         return int(match.group(1))
@@ -779,6 +845,14 @@ def _count(text: str) -> int:
     chinese = re.search(r"(?:生产|训练|造|补|折跃|刷)\s*([一二两三四五六七八九十]{1,3})", text)
     if chinese:
         return max(1, min(200, _chinese_number(chinese.group(1))))
+    english = re.search(
+        r"(?:生产|训练|造|补|折跃|刷)\s*"
+        r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)",
+        text,
+    )
+    if english:
+        return _english_number(english.group(1))
     return 1
 
 
@@ -792,8 +866,34 @@ def _chinese_number(value: str) -> int:
     return digits.get(value, 1)
 
 
+def _english_number(value: str) -> int:
+    values = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+    }
+    return values.get(value.casefold(), 1)
+
+
 def _parallel_parts(text: str) -> tuple[str, ...]:
-    match = re.match(r"^(?:并行执行|同时执行|并行)\s*[:：]\s*(.+)$", text)
+    match = re.match(r"^(?:并行执行|同时执行|并行|in parallel)\s*[:：]\s*(.+)$", text)
     if match is None:
         return ()
     parts = tuple(value.strip() for value in re.split(r"[；;|]", match.group(1)) if value.strip())
@@ -821,15 +921,15 @@ def _control_group_operation(text: str) -> tuple[str, int] | None:
     number = _control_group(text)
     if number is None:
         return None
-    if any(word in text for word in ("召回", "选择", "切到")):
+    if any(word in text for word in ("召回", "选择", "切到", "recall", "select", "switch to")):
         return "recall", number
     if any(word in text for word in ("追加并移除", "追加并偷取")):
         return "append_and_steal", number
     if any(word in text for word in ("设置并移除", "设置并偷取")):
         return "set_and_steal", number
-    if any(word in text for word in ("加入", "追加", "添加到")):
+    if any(word in text for word in ("加入", "追加", "添加到", "append", "add to")):
         return "append", number
-    if any(word in text for word in ("编为", "设为", "设置为", "保存为")):
+    if any(word in text for word in ("编为", "设为", "设置为", "保存为", "set", "save as", "assign")):
         return "set", number
     return None
 
@@ -876,6 +976,19 @@ def _schedule_expression(
             if action is not None:
                 return action, "unit_created", "gte", 1.0, unit_type, None, "once", 0.25, 1
 
+    created_en = re.match(
+        r"^(?:when|after)\s+(?:the\s+)?(?:first|next|one|a)\s+(.+?)\s+"
+        r"(?:is\s+)?(?:ready|finished|completed|finishes|completes)\s*[,;:]?\s*(.+)$",
+        clean,
+    )
+    if created_en is not None:
+        subject, raw_action = created_en.groups()
+        unit_type = _race_aware_unit_type(subject, state)
+        if unit_type is not None:
+            action = _action_for_created_unit(raw_action.strip(), unit_type)
+            if action is not None:
+                return action, "unit_created", "gte", 1.0, unit_type, None, "once", 0.25, 1
+
     group_trigger = re.match(
         r"^(?:(?:当|等到|等待)\s*)?(?:第)?\s*(10|[1-9一二三四五六七八九十])\s*号?\s*"
         r"(?:部队|队|编组)\s*(?:中|里)?\s*(?:包含|拥有|有|达到|凑齐)\s*"
@@ -885,6 +998,35 @@ def _schedule_expression(
     )
     if group_trigger is not None:
         raw_group, raw_count, subject, raw_action = group_trigger.groups()
+        group_number = _small_number(raw_group)
+        count = _small_number(raw_count)
+        unit_type = _race_aware_unit_type(subject, state)
+        if 1 <= group_number <= 10 and unit_type is not None:
+            action = _action_for_control_group(raw_action.strip(), group_number)
+            if action is not None:
+                return (
+                    action,
+                    "control_group_count",
+                    "gte",
+                    float(max(1, min(200, count))),
+                    unit_type,
+                    group_number,
+                    "once",
+                    0.25,
+                    1,
+                )
+
+    group_trigger_en = re.match(
+        r"^(?:when|after|once)\s+(?:the\s+)?(?:control\s*group|group|squad)\s*"
+        r"(10|[1-9]|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:has|contains|includes|reaches)\s*"
+        r"(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+"
+        r"(.+?)\s*[,;:]\s*(.+)$",
+        clean,
+    )
+    if group_trigger_en is not None:
+        raw_group, raw_count, subject, raw_action = group_trigger_en.groups()
         group_number = _small_number(raw_group)
         count = _small_number(raw_count)
         unit_type = _race_aware_unit_type(subject, state)
@@ -927,6 +1069,29 @@ def _schedule_expression(
             None,
         )
 
+    maintain_en = re.match(
+        r"^keep(?:\s+at\s+least)?\s*"
+        r"(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(.+)$",
+        text,
+    )
+    if maintain_en is not None:
+        target = _small_number(maintain_en.group(1))
+        unit_type = _race_aware_unit_type(maintain_en.group(2), state)
+        if unit_type is None:
+            return None
+        return (
+            f"生产1个{unit_type}",
+            "unit_count",
+            "lte",
+            float(max(0, target - 1)),
+            unit_type,
+            None,
+            "maintain",
+            0.5,
+            None,
+        )
+
     conditional = re.match(
         r"^(?:当|如果)\s*(矿物|水晶|气体|瓦斯|已用人口|人口|空闲人口|剩余人口)\s*"
         r"(达到|超过|不少于|不低于|>=|≥|低于|不超过|<=|≤)\s*(\d+)\s*(?:时|就|后)\s*[:：,，]?\s*(.+)$",
@@ -948,6 +1113,8 @@ def _schedule_expression(
         return action.strip(), kind, operator, float(raw_value), None, None, "once", 0.5, 1
 
     periodic = re.match(r"^每\s*(\d+(?:\.\d+)?)\s*秒\s*(.+)$", text)
+    if periodic is None:
+        periodic = re.match(r"^every\s*(\d+(?:\.\d+)?)\s*seconds?\s*[,;:]?\s*(.+)$", text)
     if periodic is not None:
         return (
             periodic.group(2).strip(),
@@ -962,6 +1129,8 @@ def _schedule_expression(
         )
 
     repeated = re.match(r"^重复\s*(\d{1,3})\s*次\s*[:：]?\s*(.+)$", text)
+    if repeated is None:
+        repeated = re.match(r"^repeat\s*(\d{1,3})\s*times?\s*[:：]?\s*(.+)$", text)
     if repeated is not None:
         return (
             repeated.group(2).strip(),
@@ -1003,7 +1172,11 @@ def _action_for_control_group(action: str, group_number: int) -> str | None:
 
 
 def _small_number(value: str) -> int:
-    return int(value) if value[0].isdigit() else _chinese_number(value)
+    if value[0].isdigit():
+        return int(value)
+    if value.isascii():
+        return _english_number(value)
+    return _chinese_number(value)
 
 
 def _task_name(text: str) -> str:

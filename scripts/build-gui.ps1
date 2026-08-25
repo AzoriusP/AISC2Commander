@@ -16,6 +16,7 @@ if (-not (Test-Path -LiteralPath '.venv\Scripts\python.exe')) {
     --name 'AISC2CommanderGUI' `
     --paths 'src' `
     --collect-all 'sounddevice' `
+    --add-data 'assets\about;assets\about' `
     'scripts\gui_entry.py'
 
 Copy-Item -LiteralPath 'dist\AISC2CommanderGUI.exe' -Destination 'AISC2CommanderGUI.exe' -Force

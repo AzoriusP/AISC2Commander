@@ -18,5 +18,6 @@ config/map_previews.json
 config/map_capacity.json
 config/map_points.json
 config/map_images.json
+config/gui_settings.json
 assets/map_images/*
 !assets/map_images/.gitkeep

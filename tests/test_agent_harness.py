@@ -122,6 +122,71 @@ def test_rules_parse_fuzzy_chinese_move_train_and_attack() -> None:
     }
 
 
+def test_rules_parse_common_english_commands_without_calling_an_llm() -> None:
+    planner = RulePlanner()
+
+    move = planner.plan("Move the selected Marines to A1", _state()).tool_calls[0]
+    assert move.name == "move_units"
+    assert move.arguments["selector"] == "selected"
+    assert move.arguments["unit_type"] == "Marine"
+    assert move.arguments["point_name"] == "A1"
+
+    train = planner.plan("Train five Marines", _state()).tool_calls[0]
+    assert train.name == "train_units"
+    assert train.arguments["unit_type"] == "Marine"
+    assert train.arguments["count"] == 5
+    assert train.arguments["producer_selector"] == "any_available"
+
+    build = planner.plan("Build a Supply Depot at A1", _state()).tool_calls[0]
+    assert build.name == "build_structure"
+    assert build.arguments["structure_type"] == "SupplyDepot"
+    assert build.arguments["placement_mode"] == "map_point"
+    assert build.arguments["point_name"] == "A1"
+
+    attack = planner.plan(
+        "Attack the nearest enemy with all Marines",
+        _state(),
+    ).tool_calls[0]
+    assert attack.name == "attack_units"
+    assert attack.arguments["selector"] == "all"
+    assert attack.arguments["unit_type"] == "Marine"
+    assert attack.arguments["target_mode"] == "nearest_enemy"
+
+    upgrade = planner.plan("Research Stimpack", _state()).tool_calls[0]
+    assert upgrade.name == "research_upgrade"
+    assert upgrade.arguments["upgrade"] == "Stimpack"
+
+
+def test_rules_parse_english_control_group_and_wait_triggers() -> None:
+    planner = RulePlanner()
+
+    group_move = planner.plan("Control group 1 move to B1", _state()).tool_calls[0]
+    assert group_move.name == "move_units"
+    assert group_move.arguments["selector"] == "control_group"
+    assert group_move.arguments["control_group"] == 1
+    assert group_move.arguments["point_name"] == "B1"
+
+    worker = planner.plan(
+        "When the first worker is ready, build a Supply Depot at A1",
+        _state(),
+    ).tool_calls[0]
+    assert worker.name == "schedule_task"
+    assert worker.arguments["condition_kind"] == "unit_created"
+    assert worker.arguments["condition_unit_type"] == "SCV"
+    assert worker.arguments["action_text"] == "选中的SCV在A1建造SupplyDepot"
+
+    group = planner.plan(
+        "When control group 1 has 5 Banshees, move to B1",
+        _state(),
+    ).tool_calls[0]
+    assert group.name == "schedule_task"
+    assert group.arguments["condition_kind"] == "control_group_count"
+    assert group.arguments["condition_group_number"] == 1
+    assert group.arguments["condition_unit_type"] == "Banshee"
+    assert group.arguments["condition_value"] == 5.0
+    assert group.arguments["action_text"] == "1队移动到B1"
+
+
 def test_rules_ask_for_clarification_instead_of_guessing_missing_target() -> None:
     plan = RulePlanner().plan("让这些单位移动", _state())
     assert plan.tool_calls == ()
